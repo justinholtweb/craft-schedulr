@@ -1,0 +1,106 @@
+{% extends 'schedulr/_layouts/cp' %}
+
+{% set selectedSubnavItem = 'reports' %}
+
+{% block content %}
+    <div class="flex" style="gap: 32px; margin-bottom: 24px;">
+        {% for key, label in {
+            total: 'Known browsers'|t('schedulr'),
+            pushable: 'Push'|t('schedulr'),
+            emailable: 'Email'|t('schedulr'),
+        } %}
+            <div>
+                <div class="light smalltext">{{ label }}</div>
+                <div style="font-size: 22px;">{{ stats[key]|number_format }}</div>
+            </div>
+        {% endfor %}
+    </div>
+
+    <div class="flex" style="margin-bottom: 16px;">
+        {% for option in [7, 30, 90, 365] %}
+            <a class="btn{{ days == option ? ' active' : '' }}" href="{{ url('schedulr/reports', { days: option }) }}">
+                {{ '{n} days'|t('schedulr', { n: option }) }}
+            </a>
+        {% endfor %}
+    </div>
+
+    {% set max = 1 %}
+    {% for row in series %}
+        {% set max = max(max, row.delivered, row.failed) %}
+    {% endfor %}
+
+    <div class="pane">
+        <h2>{{ 'Deliveries'|t('schedulr') }}</h2>
+
+        {#
+          A bar chart in plain HTML. No chart library, because pulling one in for two series would be
+          the largest thing this plugin ships, and it would still need a dark-mode pass. Bars are
+          measured against the window's own maximum, so a quiet fortnight is not flattened by one busy
+          day outside the range.
+        #}
+        <div style="display: flex; align-items: flex-end; gap: 2px; height: 140px; margin-top: 12px;">
+            {% for row in series %}
+                <div style="flex: 1; display: flex; flex-direction: column; justify-content: flex-end; height: 100%;"
+                     title="{{ row.day }}: {{ row.delivered }} delivered, {{ row.failed }} failed">
+                    {% if row.failed %}
+                        <div style="background: #CF1124; height: {{ (row.failed / max * 100)|round }}%; min-height: 2px;"></div>
+                    {% endif %}
+                    {% if row.delivered %}
+                        <div style="background: #C7278C; height: {{ (row.delivered / max * 100)|round }}%; min-height: 2px;"></div>
+                    {% endif %}
+                </div>
+            {% endfor %}
+        </div>
+
+        <div class="flex light smalltext" style="justify-content: space-between; margin-top: 6px;">
+            <span>{{ series|first.day }}</span>
+            <span>{{ series|last.day }}</span>
+        </div>
+    </div>
+
+    {% if tracking %}
+        <div class="pane">
+            <h2>{{ 'Best performing'|t('schedulr') }}</h2>
+
+            {% if leaderboard|length %}
+                <table class="data fullwidth">
+                    <thead>
+                        <tr>
+                            <th>{{ 'Notification'|t('schedulr') }}</th>
+                            <th>{{ 'Delivered'|t('schedulr') }}</th>
+                            <th>{{ 'Clicked'|t('schedulr') }}</th>
+                            <th>{{ 'Click rate'|t('schedulr') }}</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in leaderboard %}
+                            <tr>
+                                <td>
+                                    <a href="{{ url('schedulr/notifications/' ~ row.id ~ '/deliveries') }}">
+                                        {{ row.notification.title ?? ('#' ~ row.id) }}
+                                    </a>
+                                </td>
+                                <td>{{ row.delivered|number_format }}</td>
+                                <td>{{ row.clicked|number_format }}</td>
+                                <td>{{ row.clickRate is null ? '—' : row.clickRate ~ '%' }}</td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                <p class="light smalltext">
+                    {{ 'Only notifications with at least 20 deliveries are ranked — a 25% click rate on four deliveries means nothing.'|t('schedulr') }}
+                </p>
+            {% else %}
+                <p class="light">{{ 'Nothing has enough deliveries to rank yet.'|t('schedulr') }}</p>
+            {% endif %}
+        </div>
+    {% else %}
+        <div class="pane">
+            <p>
+                <strong>{{ 'Click tracking needs Schedulr Pro.'|t('schedulr') }}</strong>
+                {# Said out loud so Lite does not merely look empty. #}
+                {{ 'Delivered and failed counts are recorded in every edition — the chart above is real. What Pro adds is what happened after the notification arrived.'|t('schedulr') }}
+            </p>
+        </div>
+    {% endif %}
+{% endblock %}

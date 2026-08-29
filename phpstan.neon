@@ -1,0 +1,20 @@
+includes:
+    - vendor/craftcms/phpstan/phpstan.neon
+
+parameters:
+    level: 4
+    paths:
+        - src
+    excludePaths:
+        # Twig templates and front-end resources are not PHP.
+        - src/templates
+        - src/resources
+    ignoreErrors:
+        # PWA is deliberately not a dependency. Every read of it is duck-typed and wrapped, so a site
+        # without PWA installed — which is most of them — has nothing to analyse against.
+        -
+            message: '#Cannot access property \$push on craft\\base\\PluginInterface#'
+            path: src/services/Interop.php
+        -
+            message: '#Call to an undefined method craft\\base\\PluginInterface::#'
+            path: src/services/Interop.php

@@ -1,0 +1,70 @@
+{% extends 'schedulr/settings/_layout' %}
+{% import '_includes/forms' as forms %}
+
+{% block pane %}
+    <p class="light">
+        {#
+          The single most consequential screen in the plugin. A browser-level block is permanent and
+          unrecoverable — there is no API to ask again — so every default here errs towards asking
+          later rather than sooner.
+        #}
+        {{ 'A visitor who blocks notifications blocks them permanently: there is no way to ask again, on any site, ever. Every default here is deliberately patient.'|t('schedulr') }}
+    </p>
+
+    {{ forms.selectField({
+        label: 'Prompt style'|t('schedulr'),
+        name: 'settings[promptStyle]',
+        options: promptStyles,
+        value: settings.promptStyle,
+    }) }}
+
+    {{ forms.textField({
+        label: 'After this many page views'|t('schedulr'),
+        instructions: 'Zero prompts on the first page, which is the most reliable way to be blocked.'|t('schedulr'),
+        name: 'settings[promptAfterViews]',
+        value: settings.promptAfterViews,
+        size: 5,
+        type: 'number',
+    }) }}
+
+    {{ forms.textField({
+        label: 'And this many seconds on the page'|t('schedulr'),
+        name: 'settings[promptAfterSeconds]',
+        value: settings.promptAfterSeconds,
+        size: 5,
+        type: 'number',
+    }) }}
+
+    {{ forms.textField({
+        label: 'Ask again after'|t('schedulr'),
+        instructions: 'Days. Zero means a “no” is final — which is the respectful setting and also the one that protects the site from a permanent block.'|t('schedulr'),
+        name: 'settings[promptReaskDays]',
+        value: settings.promptReaskDays,
+        size: 5,
+        type: 'number',
+    }) }}
+
+    <hr>
+
+    {{ forms.textField({ label: 'Heading'|t('schedulr'), name: 'settings[promptHeading]', value: settings.promptHeading }) }}
+    {{ forms.textareaField({ label: 'Body'|t('schedulr'), name: 'settings[promptBody]', value: settings.promptBody, rows: 2 }) }}
+    {{ forms.textField({ label: 'Accept label'|t('schedulr'), name: 'settings[promptAccept]', value: settings.promptAccept }) }}
+    {{ forms.textField({ label: 'Decline label'|t('schedulr'), name: 'settings[promptDecline]', value: settings.promptDecline }) }}
+
+    {% if settings.promptStyle == 'custom' %}
+        <hr>
+        <div class="readable">
+            <p>
+                {{ 'With the custom style, Schedulr renders nothing of its own. It reveals anything carrying {prompt} and treats anything carrying {subscribe} as the accept control, wherever they are in your templates.'|t('schedulr', {
+                    prompt: '<code>data-schedulr-prompt</code>',
+                    subscribe: '<code>data-schedulr-subscribe</code>',
+                })|raw }}
+            </p>
+            <p>
+                {{ '{unsubscribe} works the same way, and both controls work on every page whether or not Schedulr would have prompted.'|t('schedulr', {
+                    unsubscribe: '<code>data-schedulr-unsubscribe</code>',
+                })|raw }}
+            </p>
+        </div>
+    {% endif %}
+{% endblock %}

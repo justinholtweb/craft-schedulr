@@ -1,0 +1,26 @@
+{#
+  Craft's own element index layout, which is the whole reason Notification is an element: statuses,
+  search, sorting, pagination, bulk actions and exporters all arrive with the `extends`.
+
+  `cp.layouts.elementindex` is a Craft hook that derives every variable this layout needs from
+  `elementType`, so the controller passes almost nothing.
+#}
+{% extends '_layouts/elementindex' %}
+
+{% set title = 'Notifications'|t('schedulr') %}
+{% set selectedSubnavItem = 'notifications' %}
+
+{% block actionButton %}
+    {% if currentUser.can('schedulr:manageNotifications') %}
+        <a href="{{ url('schedulr/notifications/new') }}" class="btn submit add icon">
+            {{ 'New notification'|t('schedulr') }}
+        </a>
+    {% endif %}
+{% endblock %}
+
+{% block content %}
+    {# Above the list, not below it: a list of scheduled sends that nothing will act on is exactly what
+       the banner exists to contradict. #}
+    {% include 'schedulr/_components/_runner-banner' %}
+    {{ parent() }}
+{% endblock %}

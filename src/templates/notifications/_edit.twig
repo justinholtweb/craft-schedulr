@@ -1,0 +1,477 @@
+{% extends 'schedulr/_layouts/cp' %}
+{% import '_includes/forms' as forms %}
+
+{% set fullPageForm = true %}
+{% set selectedSubnavItem = 'notifications' %}
+{% set crumbs = [
+    { label: 'Schedulr'|t('schedulr'), url: url('schedulr') },
+    { label: 'Notifications'|t('schedulr'), url: url('schedulr/notifications') },
+] %}
+
+{% block actionButton %}
+    <div class="btngroup">
+        <button type="submit" class="btn submit">{{ 'Save'|t('app') }}</button>
+        {% if canSend %}
+            {#
+              A separate button, not a checkbox, and its own permission. Writing a notification and
+              putting it on a hundred thousand lock screens are different acts, and a save must never
+              quietly do the second.
+            #}
+            <button type="submit" class="btn" name="sendNow" value="1"
+                    data-confirm="{{ 'Send this notification now? It cannot be recalled.'|t('schedulr') }}">
+                {{ 'Save and send now'|t('schedulr') }}
+            </button>
+        {% endif %}
+    </div>
+{% endblock %}
+
+{% block content %}
+    <input type="hidden" name="action" value="schedulr/notifications/save">
+    {{ redirectInput('schedulr/notifications/{id}') }}
+    {% if notification.id %}<input type="hidden" name="notificationId" value="{{ notification.id }}">{% endif %}
+    <input type="hidden" name="siteId" value="{{ notification.siteId }}">
+
+    {{ forms.textField({
+        first: true,
+        label: 'Title'|t('app'),
+        instructions: 'What appears in bold on the lock screen. Around 120 characters is where Chrome on Android stops showing it.'|t('schedulr'),
+        id: 'title',
+        name: 'title',
+        value: notification.title,
+        maxlength: 120,
+        showCharsLeft: true,
+        required: true,
+        errors: notification.getErrors('title'),
+    }) }}
+
+    {{ forms.textareaField({
+        label: 'Body'|t('schedulr'),
+        id: 'body',
+        name: 'body',
+        value: notification.body,
+        maxlength: 400,
+        showCharsLeft: true,
+        rows: 3,
+        errors: notification.getErrors('body'),
+    }) }}
+
+    {{ forms.textField({
+        label: 'Link'|t('schedulr'),
+        instructions: 'Where a tap lands. Relative paths resolve against the site.'|t('schedulr'),
+        id: 'url',
+        name: 'url',
+        value: notification.url,
+        errors: notification.getErrors('url'),
+    }) }}
+
+    <hr>
+
+    {{ forms.checkboxSelectField({
+        label: 'Channels'|t('schedulr'),
+        instructions: 'The notification is written once and delivered over each channel you enable. Somebody reachable on two channels gets it twice unless you set a delivery policy below.'|t('schedulr'),
+        id: 'channels',
+        name: 'channels',
+        options: channelOptions,
+        values: notification.getChannels(),
+        required: true,
+    }) }}
+
+    {% if isPro %}
+        {{ forms.selectField({
+            label: 'When two channels reach the same person'|t('schedulr'),
+            id: 'dedupePolicy',
+            name: 'dedupePolicy',
+            options: dedupeOptions,
+            value: notification.dedupePolicy,
+        }) }}
+    {% endif %}
+
+    <div class="field">
+        <div class="heading"><label>{{ 'Audience'|t('schedulr') }}</label></div>
+        <div class="input">
+            <div class="flex flex-nowrap">
+                <div class="flex-grow">
+                    {{ forms.select({
+                        id: 'audienceId',
+                        name: 'audienceId',
+                        options: [{ label: 'Everyone reachable'|t('schedulr'), value: '' }]|merge(
+                            audiences|map(a => { label: a.name ~ ' — ' ~ a.getCountLabel(), value: a.id })|values
+                        ),
+                        value: notification.audienceId,
+                        disabled: not isPro and audiences|length == 0,
+                    }) }}
+                </div>
+                <div>
+                    <button type="button" class="btn" id="preview-audience">{{ 'Count'|t('schedulr') }}</button>
+                </div>
+                <div class="flex-grow">
+                    <span id="audience-count" class="light"></span>
+                </div>
+            </div>
+        </div>
+        {% if not isPro %}
+            <p class="light">
+                {{ 'Saved audiences need Schedulr Pro. Topics below work in every edition.'|t('schedulr') }}
+            </p>
+        {% endif %}
+    </div>
+
+    {{ forms.textField({
+        label: 'Topics'|t('schedulr'),
+        instructions: 'Comma separated. Only subscribers tagged with one of these receive it. Leave empty for everybody in the audience.'|t('schedulr'),
+        id: 'topics',
+        name: 'topics',
+        value: notification.getTopics()|join(', '),
+    }) }}
+
+    <hr>
+
+    <h2>{{ 'Schedule'|t('schedulr') }}</h2>
+
+    {{ forms.lightswitchField({
+        label: 'Schedule is live'|t('schedulr'),
+        instructions: 'Off keeps this a draft. A draft never sends, whatever its schedule says.'|t('schedulr'),
+        id: 'enabled',
+        name: 'enabled',
+        on: notification.state != 'draft',
+    }) }}
+
+    {{ forms.selectField({
+        label: 'Send'|t('schedulr'),
+        id: 'mode',
+        name: 'mode',
+        options: modeOptions,
+        value: schedule.mode,
+        toggle: true,
+        targetPrefix: 'mode-',
+    }) }}
+
+    <div id="mode-at" class="{{ schedule.mode == 'at' ? '' : 'hidden' }}">
+        {{ forms.dateTimeField({
+            label: 'Date and time'|t('schedulr'),
+            id: 'sendAt',
+            name: 'sendAt',
+            value: schedule.sendAt,
+            errors: schedule.getErrors('sendAt'),
+        }) }}
+    </div>
+
+    <div id="mode-recurring" class="{{ schedule.mode == 'recurring' ? '' : 'hidden' }}">
+        {{ forms.selectField({
+            label: 'How often'|t('schedulr'),
+            id: 'frequency',
+            name: 'frequency',
+            options: [{ label: '—', value: '' }]|merge(
+                frequencyOptions|keys|map(k => { label: frequencyOptions[k], value: k })|values
+            ),
+            value: schedule.frequency,
+            toggle: true,
+            targetPrefix: 'freq-',
+            errors: schedule.getErrors('frequency'),
+        }) }}
+
+        {{ forms.textField({
+            label: 'Every'|t('schedulr'),
+            instructions: '2 means every other one.'|t('schedulr'),
+            id: 'interval',
+            name: 'interval',
+            value: schedule.interval,
+            size: 4,
+            type: 'number',
+        }) }}
+
+        <div id="freq-weekly" class="{{ schedule.frequency == 'weekly' ? '' : 'hidden' }}">
+            {{ forms.checkboxSelectField({
+                label: 'On these days'|t('schedulr'),
+                id: 'byWeekday',
+                name: 'byWeekday',
+                options: weekdays|keys|map(i => { label: weekdays[i], value: i })|values,
+                values: schedule.getByWeekday(),
+                errors: schedule.getErrors('byWeekday'),
+            }) }}
+        </div>
+
+        <div id="freq-monthly" class="{{ schedule.frequency == 'monthly' ? '' : 'hidden' }}">
+            {{ forms.textField({
+                label: 'On these days of the month'|t('schedulr'),
+                instructions: 'Comma separated. Use -1 for the last day — “31” silently skips February.'|t('schedulr'),
+                id: 'byMonthDay',
+                name: 'byMonthDay',
+                value: schedule.getByMonthDay()|join(', '),
+            }) }}
+        </div>
+
+        {{ forms.textField({
+            label: 'At'|t('schedulr'),
+            id: 'timeOfDay',
+            name: 'timeOfDay',
+            value: schedule.timeOfDay ?? '09:00',
+            placeholder: '09:00',
+            size: 6,
+        }) }}
+
+        {{ forms.dateField({
+            label: 'Start'|t('schedulr'),
+            id: 'startDate',
+            name: 'startDate',
+            value: schedule.startDate,
+        }) }}
+
+        {{ forms.dateField({
+            label: 'End'|t('schedulr'),
+            id: 'endDate',
+            name: 'endDate',
+            value: schedule.endDate,
+            errors: schedule.getErrors('endDate'),
+        }) }}
+
+        {{ forms.textField({
+            label: 'Stop after'|t('schedulr'),
+            instructions: 'Sends. Leave empty for no limit.'|t('schedulr'),
+            id: 'maxOccurrences',
+            name: 'maxOccurrences',
+            value: schedule.maxOccurrences,
+            size: 5,
+            type: 'number',
+        }) }}
+
+        {{ forms.textareaField({
+            label: 'Skip these dates'|t('schedulr'),
+            instructions: 'One YYYY-MM-DD per line. Holidays, a launch week.'|t('schedulr'),
+            id: 'exclusions',
+            name: 'exclusions',
+            value: schedule.getExclusions()|join("\n"),
+            rows: 3,
+        }) }}
+    </div>
+
+    <div id="mode-trigger" class="{{ schedule.mode == 'trigger' ? '' : 'hidden' }}">
+        {% if isPro %}
+            {{ forms.selectField({
+                label: 'Trigger'|t('schedulr'),
+                instructions: 'This notification becomes a template. Each firing produces its own notification, with its own record of who it reached — so “which article did we push on Tuesday” has an answer.'|t('schedulr'),
+                id: 'triggerType',
+                name: 'triggerType',
+                options: [{ label: '—', value: '' }]|merge(
+                    triggerOptions|keys|map(k => { label: triggerOptions[k], value: k })|values
+                ),
+                value: notification.triggerType,
+            }) }}
+
+            <div data-trigger-pane="entry.published" class="{{ notification.triggerType == 'entry.published' ? '' : 'hidden' }}">
+                {{ forms.checkboxSelectField({
+                    label: 'In these sections'|t('schedulr'),
+                    instructions: 'None chosen means every section.'|t('schedulr'),
+                    id: 'triggerSectionIds',
+                    name: 'triggerSectionIds',
+                    options: sections|map(s => { label: s.name, value: s.id })|values,
+                    values: notification.getTriggerConfig().sectionIds ?? [],
+                }) }}
+
+                {{ forms.lightswitchField({
+                    label: 'Send on every save, not just the first publish'|t('schedulr'),
+                    instructions: 'Off is almost always right. On means an editor fixing a typo re-notifies everybody.'|t('schedulr'),
+                    id: 'triggerEverySave',
+                    name: 'triggerEverySave',
+                    on: notification.getTriggerConfig().everySave ?? false,
+                }) }}
+
+                <p class="light">
+                    {{ 'The title, body and link may use Twig against the entry — for example {example}.'|t('schedulr', {
+                        example: '<code>{{ entry.title }}</code>'
+                    })|raw }}
+                </p>
+            </div>
+
+            <div data-trigger-pane="user.registered" class="{{ notification.triggerType == 'user.registered' ? '' : 'hidden' }}">
+                {{ forms.checkboxSelectField({
+                    label: 'In these groups'|t('schedulr'),
+                    id: 'triggerGroupIds',
+                    name: 'triggerGroupIds',
+                    options: userGroups|map(g => { label: g.name, value: g.id })|values,
+                    values: notification.getTriggerConfig().groupIds ?? [],
+                }) }}
+            </div>
+
+            <div data-trigger-pane="inactivity" class="{{ notification.triggerType == 'inactivity' ? '' : 'hidden' }}">
+                {{ forms.textField({
+                    label: 'Days without a visit'|t('schedulr'),
+                    id: 'triggerDays',
+                    name: 'triggerDays',
+                    value: notification.getTriggerConfig().days ?? 30,
+                    size: 5,
+                    type: 'number',
+                }) }}
+                <p class="light">{{ 'Each person receives this once, ever.'|t('schedulr') }}</p>
+            </div>
+        {% else %}
+            <div class="warning with-icon">
+                <p>{{ 'Automations need Schedulr Pro.'|t('schedulr') }}</p>
+            </div>
+        {% endif %}
+    </div>
+
+    {% if isPro and schedule.mode in ['at', 'recurring'] or schedule.timezoneMode == 'subscriber' %}
+        {{ forms.selectField({
+            label: 'Time zone'|t('schedulr'),
+            instructions: 'The second option turns one send into one per time zone on your list, each at that local time. Check the subscriber screen to see how many that is.'|t('schedulr'),
+            id: 'timezoneMode',
+            name: 'timezoneMode',
+            options: timezoneModeOptions,
+            value: schedule.timezoneMode,
+            disabled: not isPro,
+        }) }}
+    {% endif %}
+
+    {% if upcoming|length %}
+        <div class="field">
+            <div class="heading"><label>{{ 'Next sends'|t('schedulr') }}</label></div>
+            <div class="input">
+                <table class="data fullwidth">
+                    <tbody>
+                        {% for occurrence in upcoming %}
+                            <tr>
+                                <td>{{ occurrence.dueAt|datetime('short') }}</td>
+                                <td class="light">{{ occurrence.timezone ?? 'site time'|t('schedulr') }}</td>
+                                <td class="light">{{ occurrence.getStatusLabel() }}</td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    {% endif %}
+
+    <hr>
+
+    <h2>{{ 'Appearance'|t('schedulr') }}</h2>
+
+    {{ forms.textField({ label: 'Icon URL'|t('schedulr'), id: 'iconUrl', name: 'iconUrl', value: notification.iconUrl }) }}
+    {{ forms.textField({ label: 'Badge URL'|t('schedulr'), instructions: 'Monochrome, for the Android status bar.'|t('schedulr'), id: 'badgeUrl', name: 'badgeUrl', value: notification.badgeUrl }) }}
+    {{ forms.textField({ label: 'Image URL'|t('schedulr'), id: 'imageUrl', name: 'imageUrl', value: notification.imageUrl }) }}
+
+    {{ forms.textField({
+        label: 'Collapse key'|t('schedulr'),
+        instructions: 'Two notifications sharing a key replace each other on the device. Worth setting for anything that supersedes itself — a score, a status. Worth leaving empty for anything that does not, or today’s second article eats the first.'|t('schedulr'),
+        id: 'tag',
+        name: 'tag',
+        value: notification.tag,
+    }) }}
+
+    {{ forms.lightswitchField({
+        label: 'Keep on screen until acted on'|t('schedulr'),
+        instructions: 'Ignored by most mobile browsers.'|t('schedulr'),
+        id: 'requireInteraction',
+        name: 'requireInteraction',
+        on: notification.requireInteraction,
+    }) }}
+
+    <div class="field">
+        <div class="heading">
+            <label>{{ 'Action buttons'|t('schedulr') }}</label>
+            <div class="instructions"><p>{{ 'Two at most — every browser that supports them shows two, and a third is invisible with no warning.'|t('schedulr') }}</p></div>
+        </div>
+        <div class="input">
+            {% for i in 0..1 %}
+                {% set button = notification.getButtons()[i] ?? { title: '', url: '' } %}
+                <div class="flex" style="margin-bottom: 6px;">
+                    {{ forms.text({ name: 'buttons[' ~ i ~ '][title]', value: button.title, placeholder: 'Label'|t('schedulr') }) }}
+                    {{ forms.text({ name: 'buttons[' ~ i ~ '][url]', value: button.url, placeholder: 'https://…' }) }}
+                </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    {% if 'email' in notification.getChannels() or notification.emailSubject %}
+        <hr>
+        <h2>{{ 'Email'|t('schedulr') }}</h2>
+        <p class="light">
+            {{ 'A 120-character push title is a poor subject line and a 400-character body is a poor email. Leave these empty to reuse the push copy.'|t('schedulr') }}
+        </p>
+
+        {{ forms.textField({ label: 'Subject'|t('schedulr'), id: 'emailSubject', name: 'emailSubject', value: notification.emailSubject }) }}
+        {{ forms.textareaField({ label: 'HTML body'|t('schedulr'), id: 'emailBody', name: 'emailBody', value: notification.emailBody, rows: 8 }) }}
+    {% endif %}
+
+    {% if isPro %}
+        <hr>
+        <h2>{{ 'A/B test'|t('schedulr') }}</h2>
+        <p class="light">
+            {{ 'Fill in a second variant to split the audience. Each person is always put in the same arm, so a retried batch never shows one person both.'|t('schedulr') }}
+            {{ 'Fields left empty inherit from above.'|t('schedulr') }}
+        </p>
+
+        {% for i in 0..1 %}
+            {% set variant = variants[i] ?? null %}
+            <div class="pane" style="margin-bottom: 12px;">
+                <h3>{{ 'Variant {label}'|t('schedulr', { label: i == 0 ? 'A' : 'B' }) }}</h3>
+                <input type="hidden" name="variants[{{ i }}][label]" value="{{ i == 0 ? 'A' : 'B' }}">
+                {% if variant %}<input type="hidden" name="variants[{{ i }}][id]" value="{{ variant.id }}">{% endif %}
+
+                {{ forms.textField({ label: 'Title'|t('app'), name: 'variants[' ~ i ~ '][title]', value: variant.title ?? '', maxlength: 120 }) }}
+                {{ forms.textareaField({ label: 'Body'|t('schedulr'), name: 'variants[' ~ i ~ '][body]', value: variant.body ?? '', rows: 2 }) }}
+                {{ forms.textField({ label: 'Link'|t('schedulr'), name: 'variants[' ~ i ~ '][url]', value: variant.url ?? '' }) }}
+                {{ forms.textField({ label: 'Share of audience (%)'|t('schedulr'), name: 'variants[' ~ i ~ '][share]', value: variant.share ?? 50, size: 4, type: 'number' }) }}
+
+                {% if variant and variant.delivered %}
+                    <p class="light">
+                        {{ '{delivered} delivered, {clicked} clicked'|t('schedulr', { delivered: variant.delivered, clicked: variant.clicked }) }}
+                        {% if variant.getClickRate() is not null %} — {{ variant.getClickRate() }}%{% endif %}
+                        {% if variant.isWinner %} · <strong>{{ 'winner'|t('schedulr') }}</strong>{% endif %}
+                    </p>
+                {% endif %}
+            </div>
+        {% endfor %}
+    {% endif %}
+
+    {% if funnel|length %}
+        <hr>
+        <h2>{{ 'Results'|t('schedulr') }}</h2>
+        <table class="data fullwidth">
+            <tbody>
+                {% for key, value in funnel %}
+                    <tr>
+                        <th>{{ key }}</th>
+                        <td>{{ value is null ? '—' : value }}</td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        <p><a href="{{ url('schedulr/notifications/' ~ notification.id ~ '/deliveries') }}">{{ 'Full delivery log'|t('schedulr') }} &rarr;</a></p>
+    {% endif %}
+{% endblock %}
+
+{% js %}
+    // Craft's own select toggle builds its target selector as '#' + prefix + value, so a value
+    // containing a dot — `entry.published` — is parsed by jQuery as an id plus a class and nothing
+    // ever toggles. Done by hand for that one field.
+    function schedulrTriggerPanes() {
+        var value = $('#triggerType').val();
+        $('[data-trigger-pane]').each(function() {
+            $(this).toggleClass('hidden', $(this).data('trigger-pane') !== value);
+        });
+    }
+
+    $('#triggerType').on('change', schedulrTriggerPanes);
+    schedulrTriggerPanes();
+
+    // The audience count is the most useful thing on this screen: "4,812 people" beside the send
+    // button is what turns a send from a leap into a decision.
+    $('#preview-audience').on('click', function() {
+        var $out = $('#audience-count');
+        $out.text({{ 'Counting…'|t('schedulr')|json_encode|raw }});
+
+        Craft.sendActionRequest('POST', 'schedulr/notifications/preview-audience', {
+            data: {
+                siteId: $('input[name="siteId"]').val(),
+                audienceId: $('#audienceId').val(),
+                topics: $('#topics').val(),
+                channels: $('input[name="channels[]"]:checked').map(function() { return this.value; }).get()
+            }
+        }).then(function(response) {
+            $out.text(response.data.label);
+        }).catch(function() {
+            $out.text({{ 'Could not count.'|t('schedulr')|json_encode|raw }});
+        });
+    });
+{% endjs %}

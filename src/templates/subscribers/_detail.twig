@@ -1,0 +1,158 @@
+{% extends 'schedulr/_layouts/cp' %}
+{% import '_includes/forms' as forms %}
+
+{% set selectedSubnavItem = 'subscribers' %}
+{% set crumbs = [
+    { label: 'Schedulr'|t('schedulr'), url: url('schedulr') },
+    { label: 'Subscribers'|t('schedulr'), url: url('schedulr/subscribers') },
+] %}
+
+{% block content %}
+    <div class="pane">
+        <table class="data fullwidth">
+            <tbody>
+                {#
+                  Every column stored about this person, listed. The privacy screen promises this list
+                  is complete, and a promise like that is only worth making where it can be checked.
+                #}
+                {% for label, value in {
+                    ('State'|t('schedulr')): subscriber.getStateLabel(),
+                    ('Visitor ID'|t('schedulr')): subscriber.visitorId,
+                    ('Craft user'|t('schedulr')): subscriber.userId ? subscriber.getUser().username ?? subscriber.userId : '—',
+                    ('Email'|t('schedulr')): subscriber.getEmailAddress() ?? '—',
+                    ('Language'|t('schedulr')): subscriber.language ?? '—',
+                    ('Time zone'|t('schedulr')): subscriber.timezone ?? 'unknown — falls back to the site’s'|t('schedulr'),
+                    ('Platform'|t('schedulr')): subscriber.platform ?? '—',
+                    ('User agent'|t('schedulr')): subscriber.userAgent ?? 'not stored'|t('schedulr'),
+                    ('Visits'|t('schedulr')): subscriber.visits,
+                    ('Notifications received'|t('schedulr')): subscriber.notifiedCount,
+                    ('Consecutive push failures'|t('schedulr')): subscriber.failures,
+                } %}
+                    <tr><th style="width: 220px;">{{ label }}</th><td>{{ value }}</td></tr>
+                {% endfor %}
+
+                {% for label, date in {
+                    ('First seen'|t('schedulr')): subscriber.dateFirstSeen,
+                    ('Last seen'|t('schedulr')): subscriber.dateLastSeen,
+                    ('Subscribed to push'|t('schedulr')): subscriber.dateSubscribed,
+                    ('Declined push'|t('schedulr')): subscriber.dateDeclined,
+                    ('Last notified'|t('schedulr')): subscriber.dateLastNotified,
+                } %}
+                    <tr><th>{{ label }}</th><td>{{ date ? date|datetime('short') : '—' }}</td></tr>
+                {% endfor %}
+
+                <tr>
+                    <th>{{ 'Push endpoint'|t('schedulr') }}</th>
+                    <td>
+                        {#
+                          Never shown in full and never exported. An endpoint is a credential: anyone
+                          holding one can unsubscribe that device. The host is enough to tell Firefox
+                          from Chrome, which is the only reason anybody looks.
+                        #}
+                        {% if subscriber.endpoint %}
+                            <span class="light">{{ subscriber.endpoint|split('/')|slice(0, 3)|join('/') }}/…</span>
+                        {% else %}
+                            —
+                        {% endif %}
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    {% if canManage %}
+        <div class="pane">
+            <h2>{{ 'Tags'|t('schedulr') }}</h2>
+            <p class="light">{{ 'One per line. A bare word, or {syntax}.'|t('schedulr', { syntax: '<code>key=value</code>' })|raw }}</p>
+
+            {{ forms.textarea({
+                id: 'tags',
+                name: 'tags',
+                rows: 4,
+                value: tags|keys|map(k => tags[k] ? k ~ '=' ~ tags[k] : k)|join("\n"),
+            }) }}
+
+            {# Posted over Ajax, not in a nested form. This pane renders inside Craft's own page form,
+               and a nested <form> does not merely fail — the HTML parser drops the inner tag but keeps
+               its children, so a second `action` input ends up in the page form and Craft takes the
+               last one, which means Save runs Delete. #}
+            <div style="margin-top: 12px;">
+                <button type="button" class="btn submit" id="save-tags">{{ 'Save tags'|t('schedulr') }}</button>
+                <button type="button" class="btn" id="unsubscribe"
+                        data-confirm="{{ 'Unsubscribe this person from every channel?'|t('schedulr') }}">
+                    {{ 'Unsubscribe'|t('schedulr') }}
+                </button>
+                <button type="button" class="btn delete" id="delete-subscriber"
+                        data-confirm="{{ 'Delete this subscriber? Their delivery history is kept.'|t('schedulr') }}">
+                    {{ 'Delete'|t('app') }}
+                </button>
+            </div>
+        </div>
+    {% endif %}
+
+    <div class="pane">
+        <h2>{{ 'Delivery history'|t('schedulr') }}</h2>
+
+        {% if deliveries|length %}
+            <table class="data fullwidth">
+                <thead>
+                    <tr>
+                        <th>{{ 'When'|t('schedulr') }}</th>
+                        <th>{{ 'Notification'|t('schedulr') }}</th>
+                        <th>{{ 'Channel'|t('schedulr') }}</th>
+                        <th>{{ 'Status'|t('schedulr') }}</th>
+                        <th>{{ 'Detail'|t('schedulr') }}</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in deliveries %}
+                        <tr>
+                            <td class="light">{{ row.dateCreated|datetime('short') }}</td>
+                            <td>
+                                {% if row.notificationId %}
+                                    <a href="{{ url('schedulr/notifications/' ~ row.notificationId) }}">{{ row.title ?? ('#' ~ row.notificationId) }}</a>
+                                {% else %}
+                                    <span class="light">{{ '(deleted)'|t('schedulr') }}</span>
+                                {% endif %}
+                            </td>
+                            <td>{{ row.channel }}</td>
+                            <td>{{ row.status }}{% if row.statusCode %} <span class="light">{{ row.statusCode }}</span>{% endif %}</td>
+                            <td class="light smalltext">{{ row.error ? row.error|slice(0, 120) : '' }}</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% else %}
+            <p class="light">{{ 'Nothing has been sent to this person yet.'|t('schedulr') }}</p>
+        {% endif %}
+    </div>
+{% endblock %}
+
+{% js %}
+    var subscriberId = {{ subscriber.id }};
+
+    function post(action, data, redirect) {
+        Craft.sendActionRequest('POST', action, { data: $.extend({ subscriberId: subscriberId }, data || {}) })
+            .then(function(response) {
+                Craft.cp.displayNotice(response.data.message);
+                if (redirect) { window.location.href = Craft.getCpUrl(redirect); }
+            })
+            .catch(function(e) {
+                Craft.cp.displayError(e.response && e.response.data ? e.response.data.message : 'Something went wrong.');
+            });
+    }
+
+    // Craft's own `data-confirm` handling applies to form submit buttons; these post over Ajax, so the
+    // attribute is honoured here rather than being decorative.
+    function guarded(selector, handler) {
+        $(selector).on('click', function() {
+            var message = $(this).data('confirm');
+            if (message && !window.confirm(message)) { return; }
+            handler();
+        });
+    }
+
+    $('#save-tags').on('click', function() { post('schedulr/subscribers/save-tags', { tags: $('#tags').val() }); });
+    guarded('#unsubscribe', function() { post('schedulr/subscribers/unsubscribe'); });
+    guarded('#delete-subscriber', function() { post('schedulr/subscribers/delete', {}, 'schedulr/subscribers'); });
+{% endjs %}

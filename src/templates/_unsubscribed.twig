@@ -1,0 +1,34 @@
+{#
+  The page an email's unsubscribe link lands on.
+
+  Rendered in CP template mode from the plugin's own directory so it works on a site whose templates
+  know nothing about Schedulr — an unsubscribe link that 404s is worse than no link at all, and it is
+  the one link a mail provider will test.
+#}
+<!DOCTYPE html>
+<html lang="{{ craft.app.language }}">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="robots" content="noindex">
+    <title>{{ 'Unsubscribed'|t('schedulr') }}</title>
+    <style>
+        :root { color-scheme: light dark; }
+        body {
+            font: 16px/1.55 -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+            display: grid; place-items: center; min-height: 100vh; margin: 0;
+            background: #fff; color: #17141c;
+        }
+        @media (prefers-color-scheme: dark) { body { background: #1d1a22; color: #f4f1f7; } }
+        .box { max-width: 30rem; padding: 2rem; text-align: center; }
+        h1 { font-size: 1.375rem; margin: 0 0 .5rem; }
+        p { margin: 0; opacity: .75; }
+    </style>
+</head>
+<body>
+    <div class="box">
+        <h1>{{ 'You’ve been unsubscribed'|t('schedulr') }}</h1>
+        <p>{{ 'You won’t receive any more notifications from {site}.'|t('schedulr', { site: siteName }) }}</p>
+    </div>
+</body>
+</html>

@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!--
+    The CP nav variant. Craft recolours this, so it carries no colour of its own — the dial is a
+    hole in the silhouette (fill-rule evenodd) rather than a lighter shape painted over it.
+  -->
+  <path fill-rule="evenodd" d="M50 15.5a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9Zm0 8.5c13.5 0 20 11.4 20 26.5 0 9 1.4 13.6 4.6 17.3 1.6 1.9.3 4.7-2.2 4.7H27.6c-2.5 0-3.8-2.8-2.2-4.7C28.6 64.1 30 59.5 30 50.5 30 35.4 36.5 24 50 24Zm0 13a12 12 0 1 0 0 24 12 12 0 0 0 0-24Z"/>
+  <path d="M48.5 39h3v10h-3zM42 47.5h9v3h-9z"/>
+  <path d="M41.5 76h17a8.5 8.5 0 0 1-17 0Z"/>
+</svg>

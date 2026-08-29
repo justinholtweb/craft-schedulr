@@ -1,0 +1,16 @@
+{#
+  Schedulr's CP shell.
+
+  Wraps Craft's own `_layouts/cp` and does exactly one thing beyond it: sets `docTitle` and the crumb
+  trail in one place, so nine screens do not each get it slightly wrong.
+
+  Note the variable is `crumbs`, not `tabs`. `tabs` is reserved in Craft's `_layouts/cp` and setting
+  it to a plain label map makes the layout throw `mergeFilter(): Argument #1 must be of type
+  Traversable|array, string given` from inside a compiled template, with nothing pointing at your file.
+#}
+{% extends '_layouts/cp' %}
+
+{% set docTitle = (title ?? 'Schedulr'|t('schedulr')) ~ ' - ' ~ 'Schedulr'|t('schedulr') %}
+{% set crumbs = crumbs ?? [
+    { label: 'Schedulr'|t('schedulr'), url: url('schedulr') },
+] %}

@@ -1,0 +1,50 @@
+{% extends 'schedulr/_layouts/cp' %}
+
+{% set selectedSubnavItem = 'audiences' %}
+
+{% block actionButton %}
+    {% if canCreate %}
+        <a href="{{ url('schedulr/audiences/new') }}" class="btn submit add icon">{{ 'New audience'|t('schedulr') }}</a>
+    {% endif %}
+{% endblock %}
+
+{% block content %}
+    {% if not isPro %}
+        <div class="warning with-icon" style="margin-bottom: 24px;">
+            <p>
+                <strong>{{ 'Audiences need Schedulr Pro.'|t('schedulr') }}</strong>
+                {# Stated so nobody discovers it by a campaign silently reaching nobody. #}
+                {{ 'Any audiences already saved keep working and keep being sent to — Lite only stops new ones being created.'|t('schedulr') }}
+            </p>
+        </div>
+    {% endif %}
+
+    {% if audiences|length %}
+        <table class="data fullwidth">
+            <thead>
+                <tr>
+                    <th>{{ 'Name'|t('app') }}</th>
+                    <th>{{ 'Handle'|t('app') }}</th>
+                    <th>{{ 'Rules'|t('schedulr') }}</th>
+                    <th>{{ 'Size'|t('schedulr') }}</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for audience in audiences %}
+                    <tr>
+                        <td><a href="{{ url('schedulr/audiences/' ~ audience.id) }}">{{ audience.name }}</a></td>
+                        <td><code>{{ audience.handle }}</code></td>
+                        <td>{{ audience.getRuleCount() }}</td>
+                        {# The count carries its own timestamp. A number with no provenance is a number
+                           nobody can act on. #}
+                        <td class="light">{{ audience.getCountLabel() }}</td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    {% else %}
+        <p class="light">
+            {{ 'No audiences yet. Without one, a notification goes to everybody reachable on its channels — which is often exactly right.'|t('schedulr') }}
+        </p>
+    {% endif %}
+{% endblock %}

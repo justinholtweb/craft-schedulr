@@ -1,0 +1,22 @@
+{#
+  The settings sidebar. Seven panes, each posting only its own fields — which is why the save merges
+  into the existing settings rather than replacing them.
+#}
+<nav>
+    <ul>
+        {% for handle, label in {
+            'general': 'General'|t('schedulr'),
+            'prompt': 'Opt-in prompt'|t('schedulr'),
+            'push': 'Web push'|t('schedulr'),
+            'email': 'Email'|t('schedulr'),
+            'on-site': 'On-site'|t('schedulr'),
+            'delivery': 'Delivery'|t('schedulr'),
+            'privacy': 'Privacy'|t('schedulr'),
+        } %}
+            <li>
+                <a href="{{ url('schedulr/settings/' ~ handle) }}"
+                   class="{{ selectedPane == handle ? 'sel' : '' }}">{{ label }}</a>
+            </li>
+        {% endfor %}
+    </ul>
+</nav>

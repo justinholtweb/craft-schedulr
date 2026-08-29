@@ -1,0 +1,230 @@
+{% extends 'schedulr/_layouts/cp' %}
+{% import '_includes/forms' as forms %}
+
+{% set fullPageForm = true %}
+{% set selectedSubnavItem = 'audiences' %}
+{% set crumbs = [
+    { label: 'Schedulr'|t('schedulr'), url: url('schedulr') },
+    { label: 'Audiences'|t('schedulr'), url: url('schedulr/audiences') },
+] %}
+
+{% block content %}
+    <input type="hidden" name="action" value="schedulr/audiences/save">
+    {{ redirectInput('schedulr/audiences/{id}') }}
+    {% if audience.id %}<input type="hidden" name="audienceId" value="{{ audience.id }}">{% endif %}
+
+    {{ forms.textField({
+        first: true,
+        label: 'Name'|t('app'),
+        id: 'name',
+        name: 'name',
+        value: audience.name,
+        required: true,
+        errors: audience.getErrors('name'),
+    }) }}
+
+    {{ forms.textField({
+        label: 'Handle'|t('app'),
+        instructions: 'Used by {code} on the console.'|t('schedulr', { code: '<code>--audience</code>' }),
+        id: 'handle',
+        name: 'handle',
+        value: audience.handle,
+        errors: audience.getErrors('handle'),
+    }) }}
+
+    {{ forms.textareaField({
+        label: 'Description'|t('app'),
+        id: 'description',
+        name: 'description',
+        value: audience.description,
+        rows: 2,
+    }) }}
+
+    {{ forms.selectField({
+        label: 'Sites'|t('app'),
+        id: 'siteId',
+        name: 'siteId',
+        options: [{ label: 'Every site'|t('schedulr'), value: '' }]|merge(
+            sites|map(s => { label: s.name, value: s.id })|values
+        ),
+        value: audience.siteId,
+    }) }}
+
+    <hr>
+
+    <h2>{{ 'Rules'|t('schedulr') }}</h2>
+
+    {{ forms.selectField({
+        label: 'Match'|t('schedulr'),
+        id: 'match',
+        name: 'match',
+        options: [
+            { label: 'All of these rules'|t('schedulr'), value: 'all' },
+            { label: 'Any of these rules'|t('schedulr'), value: 'any' },
+        ],
+        value: audience.getCondition().match,
+    }) }}
+
+    <div id="rules"></div>
+
+    <div style="margin: 12px 0;">
+        <button type="button" class="btn add icon" id="add-rule">{{ 'Add a rule'|t('schedulr') }}</button>
+        <button type="button" class="btn" id="preview">{{ 'Count'|t('schedulr') }}</button>
+        <span id="count" class="light"></span>
+    </div>
+
+    <p class="light">
+        {#
+          Every rule compiles to SQL over one table, which is why the count is instant and why the count
+          exists at all. A segment whose size is discovered at send time is discovered too late.
+        #}
+        {{ 'Counting runs the rules against the whole list. It is a single query, so it is safe to press often.'|t('schedulr') }}
+    </p>
+{% endblock %}
+
+{% js %}
+    var RULE_TYPES = {{ ruleTypes|json_encode|raw }};
+    var OPERATORS = {{ operatorLabels|json_encode|raw }};
+    var CHOICES = {
+        timezones: {{ timezones|json_encode|raw }},
+        platforms: {{ platforms|json_encode|raw }},
+        tags: {{ tags|json_encode|raw }},
+        userGroups: {{ userGroups|map(g => { label: g.name, value: g.id })|values|json_encode|raw }},
+        sites: {{ sites|map(s => { label: s.name, value: s.id })|values|json_encode|raw }},
+        notifications: {{ notifications|map(n => { label: n.title, value: n.id })|values|json_encode|raw }}
+    };
+    var EXISTING = {{ audience.getCondition().rules|json_encode|raw }};
+
+    var index = 0;
+
+    function optionsHtml(list, selected) {
+        return list.map(function(item) {
+            var value = typeof item === 'object' ? item.value : item;
+            var label = typeof item === 'object' ? item.label : item;
+            var isSelected = String(selected) === String(value) ||
+                (Array.isArray(selected) && selected.map(String).indexOf(String(value)) !== -1);
+            return '<option value="' + Craft.escapeHtml(String(value)) + '"' + (isSelected ? ' selected' : '') + '>' +
+                Craft.escapeHtml(String(label)) + '</option>';
+        }).join('');
+    }
+
+    function valueInput(i, type, value) {
+        var spec = RULE_TYPES[type] || {};
+        var name = 'rules[' + i + '][value]';
+
+        switch (spec.input) {
+            case 'boolean':
+                return '<select name="' + name + '" class="select-inline">' +
+                    optionsHtml([{ label: 'Yes', value: '1' }, { label: 'No', value: '' }], value) + '</select>';
+            case 'number':
+            case 'days':
+                // The days input is a *duration*, never a date. A segment saved with an absolute date
+                // silently stops matching anybody a month later.
+                return '<input type="number" class="text" style="width: 90px;" name="' + name + '" value="' +
+                    Craft.escapeHtml(String(value || '')) + '">' +
+                    (spec.input === 'days' ? ' <span class="light">days</span>' : '');
+            case 'timezones':
+            case 'platforms':
+            case 'tags':
+            case 'userGroups':
+            case 'sites':
+            case 'notifications':
+                return '<select name="' + name + '[]" multiple size="4">' +
+                    optionsHtml(CHOICES[spec.input] || [], value) + '</select>';
+            default:
+                return '<input type="text" class="text" name="' + name + '" value="' +
+                    Craft.escapeHtml(String(value || '')) + '">';
+        }
+    }
+
+    function addRule(rule) {
+        var i = index++;
+        var type = (rule && rule.type) || Object.keys(RULE_TYPES)[0];
+        var spec = RULE_TYPES[type];
+
+        var typeOptions = Object.keys(RULE_TYPES).map(function(key) {
+            return '<option value="' + key + '"' + (key === type ? ' selected' : '') + '>' +
+                Craft.escapeHtml(RULE_TYPES[key].group + ' — ' + RULE_TYPES[key].label) + '</option>';
+        }).join('');
+
+        var operatorOptions = (spec.operators || ['eq']).map(function(op) {
+            return '<option value="' + op + '"' + (rule && rule.operator === op ? ' selected' : '') + '>' +
+                Craft.escapeHtml(OPERATORS[op] || op) + '</option>';
+        }).join('');
+
+        var $row = $(
+            '<div class="flex" style="align-items: flex-start; margin-bottom: 8px;">' +
+                '<select name="rules[' + i + '][type]" data-role="type">' + typeOptions + '</select>' +
+                '<select name="rules[' + i + '][operator]" data-role="operator">' + operatorOptions + '</select>' +
+                '<span data-role="value">' + valueInput(i, type, rule ? rule.value : null) + '</span>' +
+                '<button type="button" class="btn delete icon" data-role="remove"></button>' +
+            '</div>'
+        );
+
+        // Rebuilt on change rather than adapted, because the operator list and the value input both
+        // depend on the type, and half-updating them is how a rule ends up with an operator its type
+        // does not compile.
+        $row.on('change', '[data-role="type"]', function() {
+            var newType = $(this).val();
+            var newSpec = RULE_TYPES[newType] || {};
+
+            $row.find('[data-role="operator"]').html((newSpec.operators || ['eq']).map(function(op) {
+                return '<option value="' + op + '">' + Craft.escapeHtml(OPERATORS[op] || op) + '</option>';
+            }).join(''));
+
+            $row.find('[data-role="value"]').html(valueInput(i, newType, null));
+        });
+
+        $row.on('click', '[data-role="remove"]', function() { $row.remove(); });
+
+        $('#rules').append($row);
+    }
+
+    $('#add-rule').on('click', function() { addRule(null); });
+
+    (EXISTING || []).forEach(addRule);
+
+    if (!EXISTING || !EXISTING.length) {
+        addRule({ type: 'pushable', operator: 'eq', value: '1' });
+    }
+
+    $('#preview').on('click', function() {
+        var $out = $('#count').text({{ 'Counting…'|t('schedulr')|json_encode|raw }});
+
+        // Built field by field rather than by serialising the form, and the reason is not tidiness:
+        // the page form carries `action=schedulr/audiences/save`, and Craft resolves the action from
+        // the **body param** before the URL — so posting the whole form to the preview endpoint would
+        // run the save instead. Same family of trap as two `action` inputs in one form.
+        var params = new URLSearchParams();
+        params.append('match', $('#match').val());
+        params.append('siteId', $('#siteId').val() || '');
+
+        $('#rules').children().each(function(i) {
+            var $row = $(this);
+            var type = $row.find('[data-role="type"]').val();
+            var operator = $row.find('[data-role="operator"]').val();
+
+            params.append('rules[' + i + '][type]', type);
+            params.append('rules[' + i + '][operator]', operator);
+
+            var $value = $row.find('[data-role="value"]').find('select, input');
+
+            if ($value.is('select[multiple]')) {
+                ($value.val() || []).forEach(function(v) {
+                    params.append('rules[' + i + '][value][]', v);
+                });
+            } else {
+                params.append('rules[' + i + '][value]', $value.val() || '');
+            }
+        });
+
+        Craft.sendActionRequest('POST', 'schedulr/audiences/preview', {
+            data: params,
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+        }).then(function(response) {
+            $out.text(response.data.label);
+        }).catch(function() {
+            $out.text({{ 'Could not count.'|t('schedulr')|json_encode|raw }});
+        });
+    });
+{% endjs %}

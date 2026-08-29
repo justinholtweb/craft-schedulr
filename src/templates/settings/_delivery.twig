@@ -1,0 +1,85 @@
+{% extends 'schedulr/settings/_layout' %}
+{% import '_includes/forms' as forms %}
+
+{% block pane %}
+    {% include 'schedulr/_components/_runner-banner' %}
+
+    {{ forms.selectField({
+        label: 'How due notifications get sent'|t('schedulr'),
+        instructions: 'Cron is the only mode that sends on time. The web fallback can only run when somebody visits, so a quiet site sends late — it exists because a great many sites have no cron, and a scheduler that simply fails on those has a decorative scheduling feature.'|t('schedulr'),
+        name: 'settings[runnerMode]',
+        options: runnerModes,
+        value: settings.runnerMode,
+    }) }}
+
+    <div class="field">
+        <div class="heading"><label>{{ 'The cron job'|t('schedulr') }}</label></div>
+        <div class="input">
+            <code>* * * * * cd {{ alias('@root') }} && php craft schedulr/run --quiet</code>
+            <p class="light">
+                {{ 'Running it more often than the schedule needs is harmless — a mutex means a second pass finds the lock held and returns immediately.'|t('schedulr') }}
+            </p>
+        </div>
+    </div>
+
+    {{ forms.textField({
+        label: 'Minimum seconds between web-fallback runs'|t('schedulr'),
+        name: 'settings[runnerMinInterval]',
+        value: settings.runnerMinInterval,
+        size: 5,
+        type: 'number',
+    }) }}
+
+    {{ forms.textField({
+        label: 'Recipients per queue job'|t('schedulr'),
+        instructions: 'Larger is fewer jobs and more memory each. A job that dies loses its place for this many people until it retries.'|t('schedulr'),
+        name: 'settings[batchSize]',
+        value: settings.batchSize,
+        size: 5,
+        type: 'number',
+    }) }}
+
+    {{ forms.textField({
+        label: 'Materialise this many days of future sends'|t('schedulr'),
+        instructions: 'Recurring schedules are expanded into real rows ahead of time, which is what lets the schedule screen list the next twelve sends instead of promising them.'|t('schedulr'),
+        name: 'settings[expandHorizonDays]',
+        value: settings.expandHorizonDays,
+        size: 5,
+        type: 'number',
+    }) }}
+
+    <hr>
+
+    <h2>{{ 'Frequency caps'|t('schedulr') }}{{ isPro ? '' : ' — ' ~ 'Pro'|t('schedulr') }}</h2>
+
+    {{ forms.textField({
+        label: 'At most this many notifications per person'|t('schedulr'),
+        instructions: 'Zero is no cap. Capped people are excluded while the audience is resolved rather than skipped at send time — thousands of skipped ledger rows per send would bury the skips that mean something.'|t('schedulr'),
+        name: 'settings[frequencyCapCount]',
+        value: settings.frequencyCapCount,
+        size: 4,
+        type: 'number',
+        disabled: not isPro,
+    }) }}
+
+    {{ forms.textField({
+        label: 'Counted over this many days'|t('schedulr'),
+        name: 'settings[frequencyCapDays]',
+        value: settings.frequencyCapDays,
+        size: 4,
+        type: 'number',
+        disabled: not isPro,
+    }) }}
+
+    <h2>{{ 'Quiet hours'|t('schedulr') }}</h2>
+
+    <p class="light">
+        {{ 'A send landing inside the window is moved to the end of it, never dropped. Dropping would mean a daily 07:00 notification silently never sending on a site whose quiet hours run to 08:00, with nothing anywhere to say so.'|t('schedulr') }}
+        {{ 'A window that wraps midnight — 22:00 to 07:00 — is the normal case and works.'|t('schedulr') }}
+    </p>
+
+    <div class="flex">
+        <div>{{ forms.textField({ label: 'From'|t('schedulr'), name: 'settings[quietHoursStart]', value: settings.quietHoursStart, placeholder: '22:00', size: 6 }) }}</div>
+        <div>{{ forms.textField({ label: 'Until'|t('schedulr'), name: 'settings[quietHoursEnd]', value: settings.quietHoursEnd, placeholder: '07:00', size: 6 }) }}</div>
+    </div>
+{% endblock %}

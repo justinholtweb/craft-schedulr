@@ -1,0 +1,74 @@
+{% extends 'schedulr/settings/_layout' %}
+{% import '_includes/forms' as forms %}
+
+{% block pane %}
+    <div class="readable">
+        <h2>{{ 'What Schedulr stores about a visitor'|t('schedulr') }}</h2>
+        <p>
+            {{ 'The complete list. Every one of these is visible on any subscriber’s own screen, so this promise can be checked rather than taken on trust.'|t('schedulr') }}
+        </p>
+        <table class="data fullwidth">
+            <tbody>
+                {% for name, why in {
+                    ('A random ID the browser generates'|t('schedulr')): 'Kept in localStorage, not a cookie — a Set-Cookie on an HTML response poisons every full-page cache in front of the site.'|t('schedulr'),
+                    ('The push endpoint and its two keys'|t('schedulr')): 'Only when push permission is granted. This is what a notification is sent to.'|t('schedulr'),
+                    ('An email address'|t('schedulr')): 'Only if given, or taken from a signed-in Craft user.'|t('schedulr'),
+                    ('Browser language and time zone'|t('schedulr')): 'The time zone is what makes “09:00 local” mean anything.'|t('schedulr'),
+                    ('A coarse platform'|t('schedulr')): 'iOS, Android, macOS, Windows, Linux. No version, so a browser update does not look like a different platform.'|t('schedulr'),
+                    ('Visit count and first/last seen'|t('schedulr')): 'Counted per session, not per page view.'|t('schedulr'),
+                    ('The user agent'|t('schedulr')): 'Optional, below. Turning it off still records the platform, which is what segments actually need.'|t('schedulr'),
+                    ('Tags you set'|t('schedulr')): 'Whatever your own code or the CP puts there.'|t('schedulr'),
+                } %}
+                    <tr><th style="width: 300px;">{{ name }}</th><td>{{ why }}</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        <p>
+            {{ 'No page URLs, no dwell time, no cross-site identifiers, and nothing at all sent to any third party. Push messages are encrypted end to end, so the push service relays a payload it cannot read.'|t('schedulr') }}
+        </p>
+    </div>
+
+    <hr>
+
+    {{ forms.lightswitchField({
+        label: 'Store the user agent'|t('schedulr'),
+        name: 'settings[storeUserAgent]',
+        on: settings.storeUserAgent,
+    }) }}
+
+    {{ forms.textField({
+        label: 'Keep delivery and event records for'|t('schedulr'),
+        instructions: 'Days. Zero keeps them forever, which is a decision worth making deliberately rather than by omission.'|t('schedulr'),
+        name: 'settings[ledgerRetentionDays]',
+        value: settings.ledgerRetentionDays,
+        size: 5,
+        type: 'number',
+    }) }}
+
+    {{ forms.textField({
+        label: 'Forget browsers not seen for'|t('schedulr'),
+        instructions: 'Days. Zero never forgets. This deletes people; the setting above only deletes records of what the site did.'|t('schedulr'),
+        name: 'settings[subscriberRetentionDays]',
+        value: settings.subscriberRetentionDays,
+        size: 5,
+        type: 'number',
+    }) }}
+
+    <div class="field">
+        <div class="heading"><label>{{ 'On the list now'|t('schedulr') }}</label></div>
+        <div class="input">
+            <p>
+                {{ '{total} browsers, of which {push} accept push and {email} have an address.'|t('schedulr', {
+                    total: stats.total|number_format,
+                    push: stats.pushable|number_format,
+                    email: stats.emailable|number_format,
+                }) }}
+            </p>
+            <p class="light">
+                {{ 'Pruning runs with Craft’s own garbage collection, queued rather than inline. {command} runs it by hand.'|t('schedulr', {
+                    command: '<code>craft schedulr/subscribers/prune</code>'
+                })|raw }}
+            </p>
+        </div>
+    </div>
+{% endblock %}

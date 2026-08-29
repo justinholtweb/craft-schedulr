@@ -1,0 +1,46 @@
+{% extends 'schedulr/settings/_layout' %}
+{% import '_includes/forms' as forms %}
+
+{% block pane %}
+    {{ forms.lightswitchField({
+        label: 'Add Schedulr’s runtime to front-end pages'|t('schedulr'),
+        instructions: 'Off leaves every endpoint working for a site that would rather load the script from its own bundle — {code} renders it.'|t('schedulr', {
+            code: '<code>{{ craft.schedulr.runtime() }}</code>'
+        }),
+        name: 'settings[injectRuntime]',
+        on: settings.injectRuntime,
+    }) }}
+
+    {{ forms.textareaField({
+        label: 'Except on these URIs'|t('schedulr'),
+        instructions: 'One per line. {code} matches anything.'|t('schedulr', { code: '<code>*</code>' }),
+        name: 'settings[excludedUris]',
+        value: settings.excludedUris|join("\n"),
+        rows: 4,
+    }) }}
+
+    {{ forms.colorField({
+        label: 'Accent colour'|t('schedulr'),
+        instructions: 'Used by the opt-in prompt and the on-site banner. A site can override it from its own CSS with {code}.'|t('schedulr', {
+            code: '<code>--schedulr-accent</code>'
+        }),
+        name: 'settings[accentColor]',
+        value: settings.accentColor,
+    }) }}
+
+    <hr>
+
+    <div class="field">
+        <div class="heading"><label>{{ 'Edition'|t('schedulr') }}</label></div>
+        <div class="input">
+            <p>
+                {{ isPro ? 'Schedulr Pro'|t('schedulr') : 'Schedulr Lite'|t('schedulr') }}
+            </p>
+            {% if not isPro %}
+                <p class="light">
+                    {{ 'Lite composes, schedules and sends over all three channels. Pro adds segments, per-subscriber time zones, automations, A/B testing, click analytics and frequency caps.'|t('schedulr') }}
+                </p>
+            {% endif %}
+        </div>
+    </div>
+{% endblock %}

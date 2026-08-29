@@ -1,0 +1,20 @@
+{% extends 'schedulr/_layouts/cp' %}
+{% import '_includes/forms' as forms %}
+
+{% set fullPageForm = true %}
+{% set selectedSubnavItem = 'settings' %}
+{% set crumbs = [
+    { label: 'Schedulr'|t('schedulr'), url: url('schedulr') },
+    { label: 'Settings'|t('schedulr'), url: url('schedulr/settings') },
+] %}
+
+{% block sidebar %}{% include 'schedulr/settings/_nav' %}{% endblock %}
+
+{% block content %}
+    <input type="hidden" name="action" value="schedulr/settings/save">
+    {{ redirectInput('schedulr/settings/' ~ selectedPane) }}
+
+    <h1 style="margin-bottom: 20px;">{{ paneLabel }}</h1>
+
+    {% block pane %}{% endblock %}
+{% endblock %}
