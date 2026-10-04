@@ -12,6 +12,7 @@ use craft\helpers\StringHelper;
 use craft\helpers\UrlHelper;
 use DateTime;
 use justinholtweb\schedulr\db\Table;
+use justinholtweb\schedulr\elements\Notification;
 use justinholtweb\schedulr\models\Delivery;
 use justinholtweb\schedulr\models\Edition;
 use justinholtweb\schedulr\Plugin;
@@ -109,9 +110,54 @@ class Analytics extends Component
         ksort($params);
 
         $payload = http_build_query($params);
-        $key = Craft::$app->getConfig()->getGeneral()->securityKey;
 
-        return substr(hash_hmac('sha256', $payload, $key), 0, 12);
+        return substr(hash_hmac('sha256', $payload, $this->key('click')), 0, 12);
+    }
+
+    /**
+     * A key for one purpose, derived from the site's security key.
+     *
+     * Never the raw security key. Craft signs cookies, `hashData()` payloads and its own tokens with
+     * it, and a MAC computed with the same key over attacker-chosen input is an oracle for all of
+     * them. A derived key per purpose also means a click signature can never be replayed as an event
+     * signature, or the other way round.
+     */
+    private function key(string $purpose): string
+    {
+        $securityKey = (string)Craft::$app->getConfig()->getGeneral()->securityKey;
+
+        return hash_hmac('sha256', 'schedulr:' . $purpose . ':v1', $securityKey);
+    }
+
+    /**
+     * The signature a push payload carries so the worker can attribute a display or a dismissal.
+     *
+     * The worker has no visitor ID — it has no page and no localStorage — only the subscriber ID the
+     * payload gave it. A bare numeric ID on an unauthenticated endpoint would let anybody write events
+     * against every subscriber on the list, so the ID travels with a MAC over exactly that triple.
+     */
+    public function eventSignature(int $notificationId, ?int $variantId, int $subscriberId): string
+    {
+        $payload = $notificationId . ':' . ($variantId ?? '') . ':' . $subscriberId;
+
+        return substr(hash_hmac('sha256', $payload, $this->key('event')), 0, 12);
+    }
+
+    public function verifyEventSignature(int $notificationId, ?int $variantId, int $subscriberId, string $given): bool
+    {
+        return $given !== '' && hash_equals($this->eventSignature($notificationId, $variantId, $subscriberId), $given);
+    }
+
+    /**
+     * Whether a destination is one a link may be pointed at: http(s), or a path with no scheme.
+     *
+     * Applied on the way *out* as well as at save time, because a destination is also read from rows
+     * written before validation existed, and the redirect is the last place a `javascript:` URL can be
+     * stopped before it runs on the site's own origin.
+     */
+    public static function isSafeDestination(string $url): bool
+    {
+        return $url !== '' && Notification::isSafeUrl($url);
     }
 
     /**
@@ -166,6 +212,36 @@ class Analytics extends Component
     // ------------------------------------------------------------------------------- events
 
     /**
+     * Records an event only if this subscriber has not already recorded it for this notification.
+     *
+     * For the unauthenticated event endpoint. "Displayed" and "dismissed" are facts that happen once
+     * per person per notification, so a repeat is either a retry or somebody replaying the request —
+     * and in both cases writing another row only grows the table.
+     */
+    public function recordOnce(
+        string $type,
+        int $notificationId,
+        ?int $variantId,
+        int $subscriberId,
+        ?string $channel = null,
+    ): bool {
+        $exists = (new Query())
+            ->from(Table::EVENTS)
+            ->where([
+                'type' => $type,
+                'notificationId' => $notificationId,
+                'subscriberId' => $subscriberId,
+            ])
+            ->exists();
+
+        if ($exists) {
+            return false;
+        }
+
+        return $this->record($type, $notificationId, $variantId, $subscriberId, $channel);
+    }
+
+    /**
      * Records one event, and rolls the notification's counter if it is a click.
      *
      * Clicks are deduped per subscriber per notification. Without that, a notification somebody
@@ -180,13 +256,20 @@ class Analytics extends Component
         ?string $channel = null,
         ?string $url = null,
     ): bool {
-        if ($notificationId === null || !in_array($type, [
+        if (!in_array($type, [
             self::EVENT_DISPLAYED,
             self::EVENT_CLICKED,
             self::EVENT_DISMISSED,
             self::EVENT_CONVERTED,
             self::EVENT_UNSUBSCRIBED,
         ], true)) {
+            return false;
+        }
+
+        // Every event belongs to a notification except an unsubscribe from the email link, which
+        // signs the subscriber and nothing else. Refusing those silently meant no unsubscribe was
+        // ever recorded.
+        if ($notificationId === null && $type !== self::EVENT_UNSUBSCRIBED) {
             return false;
         }
 
@@ -417,8 +500,6 @@ class Analytics extends Component
 
         $cutoff = Db::prepareDateForDb((new DateTime())->modify("-{$days} days"));
 
-        return Craft::$app->getDb()->createCommand()
-            ->delete(Table::EVENTS, ['<', 'dateCreated', $cutoff])
-            ->execute();
+        return Deliveries::deleteInChunks(Table::EVENTS, ['<', 'dateCreated', $cutoff]);
     }
 }

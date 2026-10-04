@@ -5,8 +5,8 @@ declare(strict_types=1);
 namespace justinholtweb\schedulr\controllers;
 
 use Craft;
+use craft\elements\User;
 use craft\helpers\DateTimeHelper;
-use craft\helpers\Json;
 use craft\web\Controller;
 use justinholtweb\schedulr\elements\Notification;
 use justinholtweb\schedulr\models\Edition;
@@ -14,6 +14,7 @@ use justinholtweb\schedulr\models\Schedule;
 use justinholtweb\schedulr\models\Settings;
 use justinholtweb\schedulr\Plugin;
 use justinholtweb\schedulr\services\Automations;
+use yii\web\BadRequestHttpException;
 use yii\web\ForbiddenHttpException;
 use yii\web\NotFoundHttpException;
 use yii\web\Response;
@@ -117,7 +118,31 @@ class NotificationsController extends Controller
             throw new NotFoundHttpException('Notification not found.');
         }
 
+        $user = Craft::$app->getUser()->getIdentity();
+
+        if ($user === null) {
+            throw new ForbiddenHttpException();
+        }
+
+        // Taken before a single attribute is assigned: what matters is what the notification *was*.
+        $wasArmed = $notification->id !== null && self::isArmed($notification);
+
+        // Checked before the save rather than after it. Refusing a send once the save has gone
+        // through leaves the author with a changed notification and an error, which reads as "nothing
+        // happened" when something did.
+        if ($request->getBodyParam('sendNow')) {
+            $this->requirePermission(Plugin::PERMISSION_SEND_NOTIFICATIONS);
+        }
+
+        // The site being written to must be one this user may edit — and so must the one the
+        // notification is being moved away from.
+        if ($notification->siteId !== null) {
+            $this->requireSiteAccess((int)$notification->siteId);
+        }
+
         $notification->siteId = (int)$request->getBodyParam('siteId', $notification->siteId ?? Craft::$app->getSites()->getCurrentSite()->id);
+        $this->requireSiteAccess($notification->siteId);
+
         $notification->title = (string)$request->getBodyParam('title', $notification->title);
         $notification->body = (string)$request->getBodyParam('body', $notification->body);
         $notification->url = (string)$request->getBodyParam('url', $notification->url);
@@ -132,10 +157,17 @@ class NotificationsController extends Controller
         $notification->buttons = $this->buttonsFromRequest();
         $notification->topics = $this->listFromRequest('topics');
 
-        $audienceId = $request->getBodyParam('audienceId');
-        $notification->audienceId = $audienceId !== null && $audienceId !== ''
-            ? (int)$audienceId
-            : null;
+        // Every Pro-only field below is written **only when the edition allows changing it**. Lite's
+        // editor does not post them, and reading "absent" as "cleared" would make one save on a lapsed
+        // licence erase the segment, the automation and the dedupe policy a Pro licence set up — a
+        // wall dressed as a downgrade. Left alone, they keep working wherever the services still
+        // honour them, and come back intact on renewal.
+        if (Edition::allowsSegments($isPro)) {
+            $audienceId = $request->getBodyParam('audienceId');
+            $notification->audienceId = $audienceId !== null && $audienceId !== ''
+                ? (int)$audienceId
+                : null;
+        }
 
         if (Edition::allowsDedupePolicy($isPro)) {
             $notification->dedupePolicy = (string)$request->getBodyParam('dedupePolicy', 'none');
@@ -144,12 +176,14 @@ class NotificationsController extends Controller
         $trigger = (string)$request->getBodyParam('triggerType', '');
         $mode = (string)$request->getBodyParam('mode', Schedule::MODE_NOW);
 
-        if ($mode === Schedule::MODE_TRIGGER && Edition::allowsAutomations($isPro) && $trigger !== '') {
-            $notification->triggerType = $trigger;
-            $notification->triggerConfig = $this->triggerConfigFromRequest($trigger);
-        } else {
-            $notification->triggerType = null;
-            $notification->triggerConfig = [];
+        if (Edition::allowsAutomations($isPro)) {
+            if ($mode === Schedule::MODE_TRIGGER && $trigger !== '') {
+                $notification->triggerType = $trigger;
+                $notification->triggerConfig = $this->triggerConfigFromRequest($trigger);
+            } else {
+                $notification->triggerType = null;
+                $notification->triggerConfig = [];
+            }
         }
 
         // A notification is only ever saved as a draft or as scheduled. `sending`, `sent` and `failed`
@@ -157,7 +191,28 @@ class NotificationsController extends Controller
         $wantsSchedule = (bool)$request->getBodyParam('enabled');
         $notification->state = $wantsSchedule ? Notification::STATE_SCHEDULED : Notification::STATE_DRAFT;
 
-        $notification->setSchedule($this->scheduleFromRequest($notification));
+        // Scheduling *is* sending, later. Without this gate, someone with only "manage" could put a
+        // notification on every lock screen by ticking "enabled" or choosing a trigger, and the send
+        // permission would guard only the button labelled "Send now".
+        $downgraded = self::enforceSendPermission($notification, $wasArmed, $user);
+
+        $notification->setSchedule($this->scheduleFromRequest($notification, $isPro));
+
+        $variants = Edition::allowsAbTesting($isPro) ? $this->variantsFromRequest() : [];
+
+        foreach ($variants as $variant) {
+            // Variants are saved after the element, so their URLs are checked here or not at all —
+            // and a variant URL reaches the same `href` and redirect as the notification's own.
+            if (!Notification::isSafeUrl((string)$variant['url']) || !Notification::isSafeUrl((string)$variant['imageUrl'])) {
+                $notification->validate();
+                $notification->addError('variants', Craft::t('schedulr', 'Variant links and images must be an http(s) URL or a path on this site.'));
+                Craft::$app->getSession()->setError(Craft::t('schedulr', 'Couldn’t save the notification.'));
+
+                return $this->asModelFailure($notification, modelName: 'notification', routeParams: [
+                    'notification' => $notification,
+                ]);
+            }
+        }
 
         if (!$plugin->notifications->save($notification)) {
             Craft::$app->getSession()->setError(Craft::t('schedulr', 'Couldn’t save the notification.'));
@@ -168,14 +223,13 @@ class NotificationsController extends Controller
         }
 
         if (Edition::allowsAbTesting($isPro)) {
-            $plugin->notifications->saveVariants($notification->id, $this->variantsFromRequest());
+            $plugin->notifications->saveVariants($notification->id, $variants);
         }
 
         // Sending is its own permission and its own button. Writing a notification and putting it on a
-        // hundred thousand lock screens are different acts, and a save must never do the second.
+        // hundred thousand lock screens are different acts, and a save must never do the second. (The
+        // permission itself was checked before the save.)
         if ($request->getBodyParam('sendNow')) {
-            $this->requirePermission(Plugin::PERMISSION_SEND_NOTIFICATIONS);
-
             $plugin->notifications->resetCounters($notification->id);
             $occurrence = $plugin->sender->sendNow($notification);
 
@@ -186,9 +240,74 @@ class NotificationsController extends Controller
             return $this->redirectToPostedUrl($notification);
         }
 
-        Craft::$app->getSession()->setNotice(Craft::t('schedulr', 'Notification saved.'));
+        Craft::$app->getSession()->setNotice($downgraded
+            ? Craft::t('schedulr', 'Notification saved as a draft. Scheduling it needs permission to send notifications.')
+            : Craft::t('schedulr', 'Notification saved.'));
 
         return $this->redirectToPostedUrl($notification);
+    }
+
+    /**
+     * Whether a notification will go out without anybody pressing anything else: it is scheduled, it
+     * is mid-send, or an automation is attached to it.
+     */
+    public static function isArmed(Notification $notification): bool
+    {
+        return in_array($notification->state, [Notification::STATE_SCHEDULED, Notification::STATE_SENDING], true)
+            || ($notification->triggerType !== null && $notification->triggerType !== '');
+    }
+
+    /**
+     * Holds a save by someone without the send permission to a draft.
+     *
+     * Two cases. A notification that is **already armed** cannot be edited at all without the send
+     * permission — rewriting the copy of something already scheduled is sending your own words under
+     * somebody else's approval — so that is a 403. Otherwise the save goes through, but as a disabled
+     * draft with no trigger, whatever was posted: the author's words are kept and a sender can arm it.
+     *
+     * Public and static so it can be exercised without a request.
+     *
+     * @return bool Whether the requested state was downgraded.
+     * @throws ForbiddenHttpException
+     */
+    public static function enforceSendPermission(Notification $notification, bool $wasArmed, User $user): bool
+    {
+        if ($user->can(Plugin::PERMISSION_SEND_NOTIFICATIONS)) {
+            return false;
+        }
+
+        if ($wasArmed) {
+            throw new ForbiddenHttpException('Editing a scheduled or automated notification needs permission to send notifications.');
+        }
+
+        $downgraded = self::isArmed($notification);
+
+        // Not armed before, so there was no stored trigger to preserve: clearing it restores what was
+        // there.
+        $notification->state = Notification::STATE_DRAFT;
+        $notification->triggerType = null;
+        $notification->triggerConfig = [];
+
+        return $downgraded;
+    }
+
+    /**
+     * @throws BadRequestHttpException
+     * @throws ForbiddenHttpException
+     */
+    private function requireSiteAccess(int $siteId): void
+    {
+        $site = Craft::$app->getSites()->getSiteById($siteId);
+
+        if ($site === null) {
+            throw new BadRequestHttpException('Invalid site.');
+        }
+
+        // Craft only grants `editSite:*` permissions on a multi-site install; on a single site every
+        // CP user implicitly has it, and requiring it would lock everybody out.
+        if (Craft::$app->getIsMultiSite()) {
+            $this->requirePermission('editSite:' . $site->uid);
+        }
     }
 
     /**
@@ -300,7 +419,7 @@ class NotificationsController extends Controller
 
     // ------------------------------------------------------------------------ request shaping
 
-    private function scheduleFromRequest(Notification $notification): Schedule
+    private function scheduleFromRequest(Notification $notification, bool $isPro): Schedule
     {
         $request = Craft::$app->getRequest();
         $schedule = $notification->id !== null
@@ -309,7 +428,13 @@ class NotificationsController extends Controller
 
         $schedule->notificationId = $notification->id;
         $schedule->mode = (string)$request->getBodyParam('mode', Schedule::MODE_NOW);
-        $schedule->timezoneMode = (string)$request->getBodyParam('timezoneMode', Schedule::TZ_SITE);
+
+        // Per-subscriber time zones are Pro. Lite's editor shows the field disabled, so it is not
+        // posted, and the stored mode is kept rather than reset — see the Pro fields in `actionSave()`.
+        if (Edition::allowsPerSubscriberTimezone($isPro) || $schedule->id === null) {
+            $schedule->timezoneMode = (string)$request->getBodyParam('timezoneMode', Schedule::TZ_SITE);
+        }
+
         $schedule->frequency = ($f = (string)$request->getBodyParam('frequency', '')) !== '' ? $f : null;
         $schedule->interval = max(1, (int)$request->getBodyParam('interval', 1));
         $schedule->timeOfDay = ($t = (string)$request->getBodyParam('timeOfDay', '')) !== '' ? $t : null;

@@ -8,7 +8,6 @@ use Craft;
 use craft\base\Component;
 use craft\db\Query;
 use craft\helpers\Db;
-use craft\helpers\Json;
 use craft\helpers\StringHelper;
 use DateTime;
 use DateTimeImmutable;
@@ -128,10 +127,18 @@ class Schedules extends Component
             return false;
         }
 
-        if (!Edition::allowsPerSubscriberTimezone(Plugin::getInstance()->isPro())) {
-            // A downgrade, not a refusal: the schedule saves, it just resolves to one moment. The
-            // alternative — refusing the save — would make a lapsed licence look like a bug in the
-            // schedule editor.
+        if (
+            $schedule->timezoneMode === Schedule::TZ_SUBSCRIBER
+            && !Edition::allowsPerSubscriberTimezone(Plugin::getInstance()->isPro())
+            && !$this->wasPerSubscriberTimezone($schedule)
+        ) {
+            // Lite cannot *switch a schedule to* per-subscriber time zones. It saves rather than
+            // refusing — refusing would make a lapsed licence look like a bug in the schedule editor —
+            // and resolves to one moment instead.
+            //
+            // A schedule that was already per-subscriber keeps it. A downgrade, not a wall: re-saving
+            // a notification after the licence lapsed must not quietly move thirty zones' 09:00 to the
+            // site's 09:00, which for most of the list is the middle of the night.
             $schedule->timezoneMode = Schedule::TZ_SITE;
         }
 
@@ -182,6 +189,26 @@ class Schedules extends Component
         $schedule->id = (int)$db->getLastInsertID();
 
         return true;
+    }
+
+    /**
+     * Whether the stored copy of this schedule already resolves per subscriber.
+     */
+    private function wasPerSubscriberTimezone(Schedule $schedule): bool
+    {
+        $condition = $schedule->id !== null
+            ? ['id' => $schedule->id]
+            : ($schedule->notificationId !== null ? ['notificationId' => $schedule->notificationId] : null);
+
+        if ($condition === null) {
+            return false;
+        }
+
+        return (new Query())
+            ->from(Table::SCHEDULES)
+            ->where($condition)
+            ->andWhere(['timezoneMode' => Schedule::TZ_SUBSCRIBER])
+            ->exists();
     }
 
     /**
@@ -395,27 +422,95 @@ class Schedules extends Component
     }
 
     /**
-     * Returns occurrences stuck mid-send back to pending.
+     * Recovers occurrences stuck mid-send — without ever sending one twice.
      *
-     * A worker that is killed between claiming and queueing leaves a row nothing will ever pick up
-     * again, and the only symptom is a notification that never arrived — no error, no failed job,
-     * nothing in the log. Reclaiming after a generous interval is what makes the schedule
-     * self-healing rather than quietly lossy.
+     * Two different stalls, and they are deliberately treated differently:
+     *
+     * - **`claimed` for longer than `$minutes`** goes back to `pending`. A runner claimed it and died
+     *   before dispatching it, and the only symptom would otherwise be a notification that never
+     *   arrived — no error, no failed job, nothing in the log. This is safe because `dispatch()` (and
+     *   `Automations`) move a row to `sending` *before* queueing its first batch: a row still
+     *   `claimed` has no batches anywhere, so returning it to pending cannot double anything.
+     *
+     * - **`sending` is never returned to pending.** Its batches are in the queue, and the queue may
+     *   simply be behind — a worker that is down for an hour, a long send on a slow host. Reclaiming
+     *   it would dispatch the whole audience again *while the original batches are still waiting to
+     *   run*, so everybody would get it twice; doing so after thirty minutes is what this method used
+     *   to do. Instead, a `sending` row that has made no progress for `$abandonHours` is **closed**
+     *   from the totals its batches did report — `sent` if anything was delivered, `failed` if not —
+     *   with an error naming how many recipients never reported back. The notification leaves the
+     *   `sending` state with it, so an automation's in-flight guard cannot stay shut forever.
+     *
+     * Losing the stragglers of an abandoned send is the honest failure mode here. Re-sending to
+     * everybody to make sure of them is the one that loses a site its push permission.
+     *
+     * @return int Rows returned to pending plus rows closed.
      */
-    public function reclaimStalled(int $minutes = 30): int
+    public function reclaimStalled(int $minutes = 30, int $abandonHours = 24): int
     {
-        $cutoff = (new DateTime('now', new DateTimeZone('UTC')))->modify("-{$minutes} minutes");
+        $utc = new DateTimeZone('UTC');
+        $cutoff = (new DateTime('now', $utc))->modify("-{$minutes} minutes");
+        $db = Craft::$app->getDb();
 
-        return Craft::$app->getDb()->createCommand()->update(Table::OCCURRENCES, [
+        $reclaimed = $db->createCommand()->update(Table::OCCURRENCES, [
             'status' => Occurrence::STATUS_PENDING,
             'claimToken' => null,
             'claimedAt' => null,
             'dateUpdated' => Db::prepareDateForDb(new DateTime()),
         ], [
             'and',
-            ['status' => [Occurrence::STATUS_CLAIMED, Occurrence::STATUS_SENDING]],
+            ['status' => Occurrence::STATUS_CLAIMED],
             ['<', 'claimedAt', $cutoff->format('Y-m-d H:i:s')],
         ])->execute();
+
+        // `dateUpdated` rather than `claimedAt`: every finished batch touches it, so a long send that
+        // is still making progress is never mistaken for an abandoned one.
+        $abandonedBefore = Db::prepareDateForDb((new DateTime('now', $utc))->modify('-' . max(1, $abandonHours) . ' hours'));
+
+        $stalled = (new Query())
+            ->select(['id', 'notificationId', 'targeted', 'processed', 'delivered'])
+            ->from(Table::OCCURRENCES)
+            ->where(['status' => Occurrence::STATUS_SENDING])
+            ->andWhere(['<', 'dateUpdated', $abandonedBefore])
+            ->all();
+
+        $closed = 0;
+
+        foreach ($stalled as $row) {
+            $delivered = (int)$row['delivered'];
+            $missing = max(0, (int)$row['targeted'] - (int)$row['processed']);
+            $status = $delivered > 0 ? Occurrence::STATUS_SENT : Occurrence::STATUS_FAILED;
+
+            $updated = $db->createCommand()->update(Table::OCCURRENCES, [
+                'status' => $status,
+                'lastError' => sprintf('Abandoned after %d hour(s) without progress: %d recipient(s) never reported back.', max(1, $abandonHours), $missing),
+                'dateSent' => Db::prepareDateForDb(new DateTime()),
+                'dateUpdated' => Db::prepareDateForDb(new DateTime()),
+            ], [
+                'and',
+                ['id' => $row['id']],
+                // Guarded, so a batch that finishes the send between the select and here wins.
+                ['status' => Occurrence::STATUS_SENDING],
+                ['<', 'dateUpdated', $abandonedBefore],
+            ])->execute();
+
+            if ($updated === 0) {
+                continue;
+            }
+
+            $closed++;
+
+            if ($row['notificationId'] !== null) {
+                Plugin::getInstance()->notifications->setStateById(
+                    (int)$row['notificationId'],
+                    $delivered > 0 ? Notification::STATE_SENT : Notification::STATE_FAILED,
+                );
+            }
+
+            Plugin::warning(sprintf('Closed occurrence #%d, abandoned mid-send with %d recipient(s) unaccounted for.', $row['id'], $missing));
+        }
+
+        return $reclaimed + $closed;
     }
 
     public function markOccurrence(?int $id, string $status, ?string $error = null): void
@@ -461,42 +556,78 @@ class Schedules extends Component
     }
 
     /**
-     * Records that a batch has finished, and reports whether the send is now complete.
+     * Records that a batch has finished, and — for exactly one batch — closes the send.
      *
-     * The increment and the read are one statement apart, deliberately: two workers finishing at the
-     * same moment must not both see "complete" and both mark the notification sent. The increment is
-     * atomic, so exactly one of them reads a value that reaches `targeted`.
+     * Returns `null` while the send is still going, and the occurrence's **accumulated** totals to the
+     * one caller whose batch completed it. Those totals are what the outcome is decided from. Deciding
+     * from the calling batch's own counts instead marks a send that delivered 9,999 of 10,000 as
+     * `failed` whenever the last batch to finish happened to be the one with the dead device in it.
+     *
+     * Closing is a single conditional `UPDATE … WHERE processed >= targeted AND status IN (…)`, so the
+     * database picks the winner. Incrementing and then *reading* `processed` is not enough: two batches
+     * finishing together can both increment before either reads, and then both see "complete" and
+     * both close the send.
+     *
+     * @return array{targeted: int, processed: int, delivered: int, failed: int}|null
      */
-    public function completeBatch(?int $occurrenceId, int $processed, int $delivered, int $failed): bool
+    public function completeBatch(?int $occurrenceId, int $processed, int $delivered, int $failed): ?array
     {
         if ($occurrenceId === null) {
-            return false;
+            return null;
         }
 
         $db = Craft::$app->getDb();
+        $now = Db::prepareDateForDb(new DateTime());
 
         $db->createCommand()->update(Table::OCCURRENCES, [
             'processed' => new \yii\db\Expression('[[processed]] + :p', [':p' => $processed]),
             'delivered' => new \yii\db\Expression('[[delivered]] + :d', [':d' => $delivered]),
             'failed' => new \yii\db\Expression('[[failed]] + :f', [':f' => $failed]),
-            'dateUpdated' => Db::prepareDateForDb(new DateTime()),
+            'dateUpdated' => $now,
         ], ['id' => $occurrenceId])->execute();
 
+        $closed = $db->createCommand()->update(Table::OCCURRENCES, [
+            'status' => new \yii\db\Expression('CASE WHEN [[delivered]] > 0 THEN :sr_sent ELSE :sr_failed END', [
+                ':sr_sent' => Occurrence::STATUS_SENT,
+                ':sr_failed' => Occurrence::STATUS_FAILED,
+            ]),
+            'lastError' => new \yii\db\Expression('CASE WHEN [[delivered]] > 0 THEN NULL ELSE :sr_nothing END', [
+                ':sr_nothing' => 'Nothing was delivered.',
+            ]),
+            'dateSent' => $now,
+            'dateUpdated' => $now,
+        ], [
+            'and',
+            ['id' => $occurrenceId],
+            // `claimed` as well as `sending`, for a send raised by an automation before it learned to
+            // say `sending`; never anything already closed, so a late batch cannot reopen the outcome.
+            ['status' => [Occurrence::STATUS_CLAIMED, Occurrence::STATUS_SENDING]],
+            // Zero targeted means the send never resolved an audience, which `Sender::dispatch()` has
+            // already marked `skipped`. Treating it as complete here would overwrite that.
+            ['>', 'targeted', 0],
+            '[[processed]] >= [[targeted]]',
+        ])->execute();
+
+        if ($closed === 0) {
+            return null;
+        }
+
         $row = (new Query())
-            ->select(['targeted', 'processed'])
+            ->select(['targeted', 'processed', 'delivered', 'failed'])
             ->from(Table::OCCURRENCES)
             ->where(['id' => $occurrenceId])
             ->one();
 
-        if ($row === false || $row === null) {
-            return false;
+        if (!is_array($row)) {
+            return null;
         }
 
-        $targeted = (int)$row['targeted'];
-
-        // Zero targeted means the send never resolved an audience, which `Sender::dispatch()` has
-        // already marked `skipped`. Treating it as complete here would overwrite that.
-        return $targeted > 0 && (int)$row['processed'] >= $targeted;
+        return [
+            'targeted' => (int)$row['targeted'],
+            'processed' => (int)$row['processed'],
+            'delivered' => (int)$row['delivered'],
+            'failed' => (int)$row['failed'],
+        ];
     }
 
     public function cancelPending(int $notificationId): int
@@ -518,6 +649,11 @@ class Schedules extends Component
             return [];
         }
 
+        // Quiet hours are deliberately **not** applied here. They defer recurring sends only — the
+        // documented contract (docs/usage.md, "Quiet hours") is that a notification sent immediately
+        // or once at a stated time "goes when you told it to". A one-off at 23:00 is a decision a
+        // person made about one message; a recurring 23:00 is a rule that will keep landing in the
+        // night long after anyone remembers setting it.
         if (!$schedule->isPerSubscriberTimezone()) {
             return [[
                 $this->toUtc(DateTimeImmutable::createFromMutable($schedule->sendAt)),
@@ -547,28 +683,35 @@ class Schedules extends Component
             $horizon = $end < $horizon ? $end : $horizon;
         }
 
-        $from = $schedule->startDate !== null
-            ? DateTimeImmutable::createFromMutable($schedule->startDate)
-            : new DateTimeImmutable('now', $siteZone);
+        // The rule's anchor: its start date, or — for a rule with none — the day it was created. Never
+        // "now". The runner expands every minute, and a rule re-anchored at now on every pass loses
+        // its phase ("every other week" fires weekly), lands a yearly rule on today's date every day,
+        // and restarts its `maxOccurrences` count each time so the rule never stops.
+        $anchor = match (true) {
+            $schedule->startDate !== null => DateTimeImmutable::createFromMutable($schedule->startDate),
+            $schedule->dateCreated !== null => DateTimeImmutable::createFromMutable($schedule->dateCreated),
+            default => new DateTimeImmutable('now', $siteZone),
+        };
 
-        // Never before today. A rule whose start date is in the past must resume from now, not
-        // backfill — expanding a year of missed Tuesdays and then sending all of them is the worst
-        // possible reading of "every Tuesday".
-        $today = new DateTimeImmutable('now', $siteZone);
-
-        if ($from < $today) {
-            $from = $today;
-        }
+        // Output starts at today — a rule whose start date is in the past resumes, it never backfills;
+        // expanding a year of missed Tuesdays and then sending all of them is the worst possible reading
+        // of "every Tuesday". A day earlier than today, because a subscriber zone behind the site's may
+        // still be on yesterday's date with its 09:00 ahead of it. `isFuture()` drops whatever has
+        // actually passed, and `existingKeys()` makes the overlap free.
+        $notBefore = (new DateTimeImmutable('now', $siteZone))->modify('-1 day');
 
         $dates = Recurrence::dates(
             (string)$schedule->frequency,
-            $from,
+            $anchor,
             $horizon,
             $siteZone,
             $schedule->interval,
             $schedule->getByWeekday(),
             $schedule->getByMonthDay(),
+            // Counted from the anchor by `dates()` itself, so the occurrences already materialised and
+            // sent are part of the count rather than a fresh allowance on every pass.
             $schedule->maxOccurrences,
+            $notBefore,
         );
 
         if ($dates === []) {
@@ -706,9 +849,14 @@ class Schedules extends Component
             ->all();
 
         $out = [];
+        $utc = new DateTimeZone('UTC');
 
         foreach ($rows as $row) {
-            $out[(new DateTime((string)$row['dueAt']))->format('Y-m-d H:i:s') . '|' . ((string)($row['timezone'] ?? ''))] = true;
+            // Parsed as UTC and normalised to UTC, because that is what the insert side keys on. Read
+            // in PHP's default zone instead, a value the driver returns with an offset attached keys
+            // as a different wall-clock time, nothing ever matches, and the "idempotent" expansion
+            // inserts a duplicate of every row on every pass.
+            $out[(new DateTime((string)$row['dueAt'], $utc))->setTimezone($utc)->format('Y-m-d H:i:s') . '|' . ((string)($row['timezone'] ?? ''))] = true;
         }
 
         return $out;

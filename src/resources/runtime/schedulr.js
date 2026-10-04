@@ -44,21 +44,39 @@
     }
   }
 
+  // The visitor ID is the only credential the on-site inbox and event endpoints have, so it must be
+  // unguessable. `Math.random()` is not: its state can be recovered from a handful of outputs. A
+  // browser with neither `randomUUID` nor `getRandomValues` is old enough that it has no push either,
+  // and the runtime simply does not run there.
   function uuid() {
-    if (window.crypto && window.crypto.randomUUID) {
-      return window.crypto.randomUUID();
+    var c = window.crypto;
+
+    if (c && c.randomUUID) {
+      return c.randomUUID();
     }
 
-    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
-      var r = (Math.random() * 16) | 0;
-      return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
-    });
+    if (!c || !c.getRandomValues) return null;
+
+    var bytes = c.getRandomValues(new Uint8Array(16));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+
+    var hex = '';
+
+    for (var i = 0; i < 16; i++) {
+      hex += (bytes[i] + 0x100).toString(16).slice(1);
+    }
+
+    return hex.slice(0, 8) + '-' + hex.slice(8, 12) + '-' + hex.slice(12, 16) + '-' + hex.slice(16, 20) + '-' + hex.slice(20);
   }
 
   var visitorId = get(KEY_ID, null);
 
   if (!visitorId) {
     visitorId = uuid();
+
+    if (!visitorId) return;
+
     set(KEY_ID, visitorId);
   }
 
@@ -384,17 +402,20 @@
     root.className = 'schedulr-toast schedulr-toast--' + (CONFIG.onSitePosition || 'bottom-right');
     root.setAttribute('role', 'status');
 
-    var inner = document.createElement(item.url ? 'a' : 'div');
+    var href = safeUrl(item.url);
+    var inner = document.createElement(href ? 'a' : 'div');
     inner.className = 'schedulr-toast__inner';
 
-    if (item.url) {
-      inner.href = item.url;
+    if (href) {
+      inner.href = href;
     }
 
-    if (item.image) {
+    var src = safeUrl(item.image);
+
+    if (src) {
       var img = document.createElement('img');
       img.className = 'schedulr-toast__image';
-      img.src = item.image;
+      img.src = src;
       img.alt = '';
       inner.appendChild(img);
     }
@@ -442,6 +463,24 @@
       window.setTimeout(function () {
         dismissToast(root, item, true);
       }, CONFIG.onSiteAutoDismiss * 1000);
+    }
+  }
+
+  /**
+   * The URL, resolved against the page, if it is http(s); otherwise null.
+   *
+   * The server validates every URL a notification stores, and this is the second lock on the same
+   * door: an `href` is the one place a `javascript:` URL turns straight into script on this origin.
+   */
+  function safeUrl(value) {
+    if (!value || typeof value !== 'string') return null;
+
+    try {
+      var url = new URL(value, window.location.href);
+
+      return url.protocol === 'https:' || url.protocol === 'http:' ? url.href : null;
+    } catch (e) {
+      return null;
     }
   }
 

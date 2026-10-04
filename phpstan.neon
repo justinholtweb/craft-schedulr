@@ -13,8 +13,5 @@ parameters:
         # PWA is deliberately not a dependency. Every read of it is duck-typed and wrapped, so a site
         # without PWA installed — which is most of them — has nothing to analyse against.
         -
-            message: '#Cannot access property \$push on craft\\base\\PluginInterface#'
-            path: src/services/Interop.php
-        -
-            message: '#Call to an undefined method craft\\base\\PluginInterface::#'
+            message: '#Access to an undefined property craft\\base\\(PluginInterface::\$push|Model::\$(enabled|serviceWorkerEnabled))\.#'
             path: src/services/Interop.php

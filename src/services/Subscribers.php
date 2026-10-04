@@ -28,16 +28,55 @@ use justinholtweb\schedulr\Plugin;
 class Subscribers extends Component
 {
     /**
+     * The push services every shipping browser subscribes through. Each entry matches itself and any
+     * subdomain.
+     *
+     * - `fcm.googleapis.com` — Chrome, Opera, Brave, Samsung Internet and every other Chromium.
+     * - `push.services.mozilla.com` — Firefox (`updates.push.services.mozilla.com`).
+     * - `notify.windows.com` — Edge on Windows (`wns2-*.notify.windows.com`).
+     * - `push.apple.com` — Safari on macOS and iOS (`web.push.apple.com`).
+     *
+     * Anything else needs `Settings::$extraPushHosts`.
+     */
+    public const PUSH_HOSTS = [
+        'fcm.googleapis.com',
+        'push.services.mozilla.com',
+        'notify.windows.com',
+        'push.apple.com',
+    ];
+
+    /**
+     * Requests per IP per window on the public endpoints. Generous on purpose: a campus or an office
+     * is one IP with hundreds of browsers behind it, and the runtime sends one heartbeat per page view.
+     * The limits exist to stop a script minting rows, not to meter readers.
+     */
+    public const RATE_WINDOW = 600;
+    public const RATE_HEARTBEAT = 600;
+    public const RATE_NEW_VISITOR = 120;
+    public const RATE_SUBSCRIBE = 60;
+    public const RATE_EVENT = 1200;
+
+    /** The purpose prefix inside a signed unsubscribe token, so no other signed value can stand in for one. */
+    private const UNSUBSCRIBE_PURPOSE = 'schedulr-unsub:';
+
+    /**
      * Records that a browser was here.
      *
      * Called on every page load, so it must be one write and no reads beyond the lookup. Returns
      * the subscriber so the caller can answer the runtime's questions in the same request.
+     *
+     * `$mayCreate` is asked only when the visitor is new, and answering false refuses to create the
+     * row. It is how the public endpoint rate-limits *new rows* without spending a cache write on every
+     * returning visitor's page view.
+     *
+     * @param (callable(): bool)|null $mayCreate
      */
     public function touch(
         string $visitorId,
         ?int $siteId = null,
         ?string $timezone = null,
         ?string $language = null,
+        ?callable $mayCreate = null,
     ): ?Subscriber {
         $visitorId = $this->normaliseVisitorId($visitorId);
 
@@ -50,6 +89,10 @@ class Subscribers extends Component
         $existing = $this->getByVisitorId($visitorId, $siteId);
 
         if ($existing === null) {
+            if ($mayCreate !== null && !$mayCreate()) {
+                return null;
+            }
+
             return $this->create($visitorId, $siteId, $timezone, $language);
         }
 
@@ -157,7 +200,11 @@ class Subscribers extends Component
             'auth' => $auth,
             'contentEncoding' => 'aes128gcm',
             'failures' => 0,
-            'unsubscribed' => false,
+            // `unsubscribed` is deliberately **not** touched. It is the global opt-out — the one an
+            // email footer link sets — and this method is reachable from a public, unauthenticated
+            // endpoint keyed on a browser-held ID. Clearing it here would let any page load undo
+            // somebody's unsubscribe from everything. Push opt-in is the endpoint itself; a person who
+            // unsubscribed from everything stays unsubscribed until an administrator says otherwise.
             // Cleared, because granting permission is the visitor changing their mind and the
             // prompt must stop treating them as someone who said no.
             'dateDeclined' => null,
@@ -329,7 +376,7 @@ class Subscribers extends Component
         return [
             'total' => (int)$base()->count(),
             'pushable' => (int)$base()->andWhere(self::pushableCondition())->count(),
-            'emailable' => (int)$base()->andWhere(['unsubscribed' => false])->andWhere(['not', ['email' => null]])->count(),
+            'emailable' => (int)$base()->andWhere(self::emailableCondition())->count(),
             'declined' => (int)$base()->andWhere(['not', ['dateDeclined' => null]])->andWhere(['endpointHash' => null])->count(),
             'unsubscribed' => (int)$base()->andWhere(['unsubscribed' => true])->count(),
         ];
@@ -511,10 +558,7 @@ class Subscribers extends Component
 
         $cutoff = (new DateTime())->modify("-{$days} days");
 
-        return Craft::$app->getDb()->createCommand()->delete(Table::SUBSCRIBERS, [
-            'and',
-            ['<', 'dateLastSeen', Db::prepareDateForDb($cutoff)],
-        ])->execute();
+        return Deliveries::deleteInChunks(Table::SUBSCRIBERS, ['<', 'dateLastSeen', Db::prepareDateForDb($cutoff)]);
     }
 
     // -------------------------------------------------------------------------- internals
@@ -576,6 +620,32 @@ class Subscribers extends Component
         ];
     }
 
+    /**
+     * "Email can reach this row", in SQL — the same test `Subscriber::isEmailable()` applies in PHP.
+     *
+     * An address given to Schedulr, *or* a linked Craft user who has one. Counting only the column
+     * would report zero emailable subscribers on a site where every signed-in reader is reachable,
+     * because nothing copies a user's address onto the subscriber row — on purpose, so changing it
+     * in one place changes it everywhere.
+     */
+    public static function emailableCondition(): array
+    {
+        return [
+            'and',
+            ['unsubscribed' => false],
+            [
+                'or',
+                ['and', ['not', ['email' => null]], ['not', ['email' => '']]],
+                ['in', 'userId', (new Query())
+                    ->select(['id'])
+                    ->from(\craft\db\Table::USERS)
+                    ->where(['not', ['email' => null]])
+                    ->andWhere(['not', ['email' => '']]),
+                ],
+            ],
+        ];
+    }
+
     private function query(): Query
     {
         return (new Query())
@@ -605,7 +675,7 @@ class Subscribers extends Component
         }
 
         if (!empty($criteria['emailable'])) {
-            $query->andWhere(['not', ['email' => null]])->andWhere(['unsubscribed' => false]);
+            $query->andWhere(self::emailableCondition());
         }
 
         if (isset($criteria['unsubscribed'])) {
@@ -662,28 +732,164 @@ class Subscribers extends Component
     /**
      * Whether an endpoint is one this server is willing to POST to on a schedule.
      *
-     * The subscribe endpoint is public and unauthenticated, so without this check anybody on the
-     * internet can register `http://169.254.169.254/…` and have the site's own queue fetch it
-     * every time a notification goes out.
+     * The subscribe endpoint is public and unauthenticated, so this is the whole of the SSRF defence:
+     * an endpoint is a URL the site's own queue will fetch every time a notification goes out. Shape
+     * checks ("https, a dotted host, not an IP") are not enough — `https://intranet.example.com/` and
+     * a public hostname resolving to `169.254.169.254` both pass them — so the host has to be a push
+     * service the plugin knows about, on the default port, with no credentials smuggled into it.
+     *
+     * Public because every path that stores or sends to an endpoint applies it: `subscribe()`, PWA
+     * adoption in `services\Interop`, and `PushChannel` immediately before the request.
      */
-    private function isAcceptableEndpoint(string $endpoint): bool
+    public function isAcceptableEndpoint(string $endpoint): bool
     {
-        if (!str_starts_with($endpoint, 'https://')) {
+        if (!str_starts_with($endpoint, 'https://') || strlen($endpoint) > 1000) {
             return false;
         }
 
-        $host = parse_url($endpoint, PHP_URL_HOST);
-
-        if (!is_string($host) || $host === '') {
+        // Whitespace and control characters are refused outright rather than trimmed: the URL that
+        // was checked must be byte-for-byte the URL that is fetched.
+        if (preg_match('/[\x00-\x20\x7f\\\\]/', $endpoint)) {
             return false;
         }
 
-        // A bare IP is never a push service; every one of them is a named host behind DNS.
-        if (filter_var($host, FILTER_VALIDATE_IP) !== false) {
+        $parts = parse_url($endpoint);
+
+        if (!is_array($parts) || ($parts['scheme'] ?? '') !== 'https') {
             return false;
         }
 
-        return str_contains($host, '.') && !str_ends_with(strtolower($host), '.localhost');
+        // `https://fcm.googleapis.com@attacker.example/` puts the allowlisted name in the userinfo,
+        // where a lax check sees it and the HTTP client ignores it.
+        if (isset($parts['user']) || isset($parts['pass'])) {
+            return false;
+        }
+
+        if (isset($parts['port']) && (int)$parts['port'] !== 443) {
+            return false;
+        }
+
+        $host = strtolower((string)($parts['host'] ?? ''));
+
+        if ($host === '' || filter_var($host, FILTER_VALIDATE_IP) !== false) {
+            return false;
+        }
+
+        foreach ($this->pushHosts() as $allowed) {
+            if ($host === $allowed || str_ends_with($host, '.' . $allowed)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * The built-in push hosts plus any the site has added.
+     *
+     * @return string[]
+     */
+    public function pushHosts(): array
+    {
+        $extra = array_map(
+            static fn($host) => strtolower(trim((string)$host, " \t\n\r\0\x0B.")),
+            (array)Plugin::getInstance()->getSettings()->extraPushHosts,
+        );
+
+        // A bare TLD in the extra list would allow every host under it, which is the check switched
+        // off. An entry needs at least one dot to count.
+        $extra = array_filter($extra, static fn(string $host) => $host !== '' && str_contains($host, '.'));
+
+        return array_values(array_unique(array_merge(self::PUSH_HOSTS, $extra)));
+    }
+
+    // ----------------------------------------------------------------- public endpoint guards
+
+    /**
+     * A fixed-window per-IP counter on the cache.
+     *
+     * Deliberately light: one cache read and one write, no locks. A race between two requests can let
+     * a burst overshoot by a request or two, which is irrelevant to the only thing this is for —
+     * stopping a script from minting a row per request on an unauthenticated endpoint.
+     *
+     * The IP is Craft's `getUserIP()`, which honours `trustedHosts`/`ipHeaders` from the general config.
+     * Reading `X-Forwarded-For` directly would let the attacker choose their own bucket per request.
+     */
+    public function throttle(string $bucket, int $limit, int $window = self::RATE_WINDOW): bool
+    {
+        $request = Craft::$app->getRequest();
+
+        if ($request->getIsConsoleRequest() || $limit <= 0) {
+            return true;
+        }
+
+        $ip = (string)($request->getUserIP() ?? 'unknown');
+        $slot = intdiv(time(), max(1, $window));
+        $key = 'schedulr:rl:' . $bucket . ':' . hash('sha256', $ip) . ':' . $slot;
+
+        $cache = Craft::$app->getCache();
+        $count = (int)$cache->get($key);
+
+        if ($count >= $limit) {
+            return false;
+        }
+
+        $cache->set($key, $count + 1, $window);
+
+        return true;
+    }
+
+    /**
+     * Whether a request to a runtime endpoint can only have come from this site's own pages or worker.
+     *
+     * The endpoints are CSRF-exempt (see `SubscribeController`), so this is what stands in for it. A
+     * cross-site page can POST `text/plain` or a form without a preflight; it cannot POST
+     * `application/json` without one, and nothing here answers a preflight. Browsers that send
+     * `Sec-Fetch-Site` say outright where the request came from, and `none` is a user-initiated one.
+     */
+    public function isRuntimeRequest(): bool
+    {
+        $request = Craft::$app->getRequest();
+
+        if ($request->getIsConsoleRequest()) {
+            return true;
+        }
+
+        $contentType = strtolower((string)$request->getContentType());
+
+        if (str_starts_with($contentType, 'application/json')) {
+            return true;
+        }
+
+        $site = strtolower((string)$request->getHeaders()->get('Sec-Fetch-Site', ''));
+
+        return $site === 'same-origin' || $site === 'none';
+    }
+
+    // ------------------------------------------------------------------ unsubscribe tokens
+
+    /**
+     * The signed token in an email's unsubscribe link.
+     *
+     * Signs a purpose-bound string rather than the bare ID. Craft's `hashData()` is used for other
+     * things on the same site with the same key, and a token that is just a signed integer would accept
+     * any signed integer anything else ever handed out.
+     */
+    public function unsubscribeToken(int $subscriberId): string
+    {
+        return Craft::$app->getSecurity()->hashData(self::UNSUBSCRIBE_PURPOSE . $subscriberId);
+    }
+
+    /** The subscriber an unsubscribe token names, or null when it is not a valid one. */
+    public function subscriberIdFromUnsubscribeToken(string $token): ?int
+    {
+        $data = Craft::$app->getSecurity()->validateData($token);
+
+        if (!is_string($data) || !preg_match('/^' . preg_quote(self::UNSUBSCRIBE_PURPOSE, '/') . '(\d+)$/', $data, $m)) {
+            return null;
+        }
+
+        return (int)$m[1];
     }
 
     private function isUsableTimeZone(string $name): bool

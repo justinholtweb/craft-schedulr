@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<!-- handmade: hand-tuned deck -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Schedulr — Plugin Store promos</title>
+<link rel="stylesheet" href="fonts.css">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --ink: #140d13;
+    --panel: rgba(28, 18, 27, 0.82);
+    --line: rgba(255, 255, 255, 0.09);
+    --accent: #C7278C;
+    --accent-light: #F28BC9;
+    --gold: #F5B841;
+    --green: #5EE0A0;
+    --off-white: #f5f0f4;
+    --muted: rgba(245, 240, 244, 0.62);
+    --dim: rgba(245, 240, 244, 0.40);
+  }
+
+  html { background: #000; }
+
+  body {
+    font-family: 'Inter', -apple-system, sans-serif;
+    color: var(--off-white);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ---- slide shell ---------------------------------------------------- */
+  .slide {
+    position: relative;
+    width: 1920px;
+    height: 1080px;
+    overflow: hidden;
+    background:
+      radial-gradient(ellipse at 85% 12%, rgba(199, 39, 140, 0.34) 0%, transparent 40%),
+      radial-gradient(ellipse at 62% 4%,  rgba(242, 139, 201, 0.12) 0%, transparent 35%),
+      radial-gradient(ellipse at 12% 88%, rgba(245, 184, 65, 0.07) 0%, transparent 40%),
+      radial-gradient(ellipse at 35% 96%, rgba(199, 39, 140, 0.14) 0%, transparent 35%),
+      linear-gradient(135deg, #120c12 0%, #1a0f18 32%, #200f1c 60%, #120c12 100%);
+  }
+
+  /* Oversized watermark: the bell with the tile stripped, because a rounded square at this size
+     reads as a grey box across the slide rather than as the icon. It runs off the right and
+     bottom edges so no straight line closes it back into a rectangle. */
+  .slide::after {
+    content: '';
+    position: absolute;
+    top: 18%;
+    right: -18%;
+    width: 1300px;
+    height: 1300px;
+    background: url('assets/watermark.svg') no-repeat center / contain;
+    opacity: 0.035;
+    pointer-events: none;
+  }
+  .cover::after { display: none; }
+
+  .slide::before {
+    content: '';
+    position: absolute;
+    inset: 0 0 auto 0;
+    height: 6px;
+    background: linear-gradient(90deg, var(--accent), var(--accent-light), var(--gold), var(--accent));
+    z-index: 5;
+  }
+
+  .inner {
+    position: relative;
+    z-index: 2;
+    height: 100%;
+    padding: 118px 130px;
+    display: flex;
+    align-items: center;
+  }
+
+  /* ---- type ------------------------------------------------------------ */
+  .eyebrow {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    font-size: 20px;
+    font-weight: 500;
+    letter-spacing: 0.32em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 34px;
+  }
+  .eyebrow .rule { width: 58px; height: 3px; border-radius: 2px; background: var(--accent-light); }
+
+  h1, h2 { font-family: 'Jersey 20', sans-serif; font-weight: 400; line-height: 0.9; letter-spacing: 0.005em; }
+
+  .gradient-text {
+    background: linear-gradient(100deg, #E0479F 0%, #F28BC9 40%, #FCE3F1 68%, #E0479F 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  .lede { font-size: 33px; line-height: 1.45; color: rgba(245, 240, 244, 0.72); }
+  .mono { font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace; }
+
+  .points { list-style: none; margin-top: 38px; display: flex; flex-direction: column; gap: 18px; }
+  .points li { display: flex; gap: 16px; font-size: 25px; line-height: 1.4; color: var(--muted); }
+  .points li::before {
+    content: ''; flex: 0 0 auto; width: 10px; height: 10px; margin-top: 13px;
+    border-radius: 50%; background: var(--accent-light);
+  }
+
+  /* ---- cover ----------------------------------------------------------- */
+  .cover .inner { gap: 90px; }
+  .cover .copy { flex: 1 1 auto; }
+  .cover h1 { font-size: 176px; margin-bottom: 26px; }
+  .cover .tagline { font-size: 46px; line-height: 1.25; color: rgba(245, 240, 244, 0.8); margin-bottom: 46px; max-width: 960px; }
+  .cover .badges { display: flex; gap: 18px; align-items: center; }
+  .badge {
+    font-size: 24px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase;
+    padding: 14px 26px; border-radius: 999px; border: 2px solid rgba(242, 139, 201, 0.45);
+    color: rgba(245, 240, 244, 0.86);
+  }
+  .badge.price { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .cover .mark img { width: 420px; height: 420px; display: block; filter: drop-shadow(0 30px 60px rgba(199, 39, 140, 0.35)); }
+
+  /* ---- feature layout -------------------------------------------------- */
+  .feature .copy { width: 640px; flex: 0 0 auto; }
+  .feature h2 { font-size: 96px; margin-bottom: 30px; }
+  .stage { position: absolute; right: 120px; top: 50%; transform: translateY(-50%); z-index: 3; }
+
+  .card {
+    border-radius: 16px; border: 1px solid var(--line); background: var(--panel);
+    box-shadow: 0 30px 80px rgba(0, 0, 0, 0.45);
+  }
+  .label { font-size: 17px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--dim); font-weight: 600; }
+
+  /* ---- slide 2: one message, three channels ----------------------------- */
+  .fan { width: 1000px; display: grid; grid-template-columns: 380px 1fr; gap: 36px 70px; align-items: center; }
+  .compose { padding: 30px 32px; grid-row: 1 / span 3; position: relative; }
+  .compose .label { margin-bottom: 18px; }
+  .compose .t { font-size: 27px; font-weight: 700; margin-bottom: 10px; }
+  .compose .b { font-size: 22px; line-height: 1.45; color: var(--muted); margin-bottom: 22px; }
+  .compose .chips { display: flex; gap: 10px; flex-wrap: wrap; }
+  .chip { font-size: 17px; font-weight: 600; padding: 7px 14px; border-radius: 999px; background: rgba(199, 39, 140, 0.22); color: var(--accent-light); }
+  .compose::after {
+    content: ''; position: absolute; right: -72px; top: 50%; width: 72px; height: 2px;
+    background: linear-gradient(90deg, var(--accent-light), rgba(242, 139, 201, 0.2));
+  }
+  .out { padding: 20px 24px; display: grid; grid-template-columns: 52px 1fr; gap: 18px; align-items: center; position: relative; }
+  .out::before {
+    content: ''; position: absolute; left: -36px; top: 50%; width: 36px; height: 2px; background: rgba(242, 139, 201, 0.35);
+  }
+  .out .ic { width: 52px; height: 52px; border-radius: 12px; display: grid; place-items: center; background: rgba(255,255,255,0.06); }
+  .out .k { font-size: 16px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--accent-light); font-weight: 700; margin-bottom: 4px; }
+  .out .v { font-size: 22px; color: var(--off-white); line-height: 1.35; }
+  .out .v span { color: var(--dim); }
+  .policy { grid-column: 1 / span 2; padding: 22px 28px; display: grid; grid-template-columns: auto 1fr; gap: 10px 24px; align-items: baseline; }
+  .policy .label { grid-column: 1 / span 2; margin-bottom: 6px; }
+  .policy b { font-size: 21px; color: var(--off-white); white-space: nowrap; }
+  .policy span { font-size: 21px; color: var(--muted); }
+  .policy .on b { color: var(--accent-light); }
+
+  /* ---- slide 3: the next twelve sends ---------------------------------- */
+  .sched { width: 940px; padding: 34px 40px; }
+  .rule-line { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 22px; }
+  .rule-line .r { font-size: 30px; font-weight: 700; }
+  .rule-line .r em { font-style: normal; color: var(--accent-light); }
+  .runner { font-size: 19px; color: var(--green); display: flex; align-items: center; gap: 10px; }
+  .runner i { width: 11px; height: 11px; border-radius: 50%; background: var(--green); box-shadow: 0 0 12px var(--green); }
+  .sends { display: grid; grid-template-columns: 1fr 1fr; gap: 0 40px; }
+  .send { display: grid; grid-template-columns: 40px 1fr auto; align-items: baseline; padding: 12px 0; border-bottom: 1px solid rgba(255,255,255,0.06); font-size: 23px; }
+  .send .n { font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace; color: var(--dim); font-size: 18px; }
+  .send .d { color: var(--off-white); }
+  .send .s { font-size: 16px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--dim); }
+  .send.first .s { color: var(--gold); }
+  .send.skip .d { color: var(--dim); text-decoration: line-through; }
+  .sched .foot { margin-top: 22px; font-size: 19px; color: var(--dim); }
+  .sched .foot b { color: var(--muted); font-weight: 600; }
+
+  /* ---- slide 4: own time zone ------------------------------------------ */
+  .zones { width: 980px; padding: 30px 38px; }
+  .zones .head, .zone { display: grid; grid-template-columns: 1fr 150px 260px; align-items: center; }
+  .zones .head { padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+  .zone { padding: 13px 0; border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 23px; }
+  .zone:last-child { border-bottom: 0; }
+  .zone .tz { color: var(--off-white); }
+  .zone .tz span { color: var(--dim); font-size: 18px; margin-left: 10px; }
+  .zone .local { font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace; color: var(--accent-light); font-weight: 700; }
+  .zone .utc { font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace; color: var(--muted); font-size: 21px; }
+  .zones .more { padding-top: 12px; font-size: 19px; color: var(--dim); }
+
+  /* ---- slide 5: audiences + automations -------------------------------- */
+  .aud { width: 1000px; display: flex; flex-direction: column; gap: 26px; }
+  .builder { padding: 28px 34px; }
+  .builder .top { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 18px; }
+  .builder .name { font-size: 28px; font-weight: 700; }
+  .count { font-size: 22px; color: var(--muted); }
+  .count b { font-size: 34px; color: var(--accent-light); margin-right: 8px; }
+  .cond { display: grid; grid-template-columns: 320px 210px 1fr; gap: 14px; margin-top: 12px; }
+  .cond div { font-size: 20px; padding: 12px 16px; border-radius: 9px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.07); color: var(--off-white); }
+  .cond div.op { color: var(--muted); }
+  .cond div em { font-style: normal; color: var(--dim); font-size: 16px; display: block; letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 2px; }
+  .triggers { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+  .trig { padding: 22px 24px; }
+  .trig .k { font-size: 16px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--accent-light); font-weight: 700; margin-bottom: 8px; }
+  .trig .v { font-size: 22px; line-height: 1.35; color: var(--off-white); }
+  .trig .v span { color: var(--dim); }
+
+  /* ---- slide 6: what happened ------------------------------------------ */
+  .results { width: 1000px; display: flex; flex-direction: column; gap: 26px; }
+  .funnel { padding: 30px 36px; }
+  .bar-row { display: grid; grid-template-columns: 170px 1fr 130px; align-items: center; gap: 22px; margin-top: 16px; }
+  .bar-row .k { font-size: 21px; color: var(--muted); }
+  .bar-row .track { height: 30px; border-radius: 8px; background: rgba(255,255,255,0.05); overflow: hidden; }
+  .bar-row .fill { height: 100%; border-radius: 8px; background: linear-gradient(90deg, var(--accent), var(--accent-light)); }
+  .bar-row .v { font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace; font-size: 22px; text-align: right; color: var(--off-white); }
+  .ab { padding: 26px 36px; display: grid; grid-template-columns: 1fr 1fr; gap: 26px; }
+  .ab .label { grid-column: 1 / span 2; }
+  .arm { border-radius: 12px; border: 1px solid var(--line); padding: 18px 22px; }
+  .arm .k { font-size: 18px; color: var(--dim); margin-bottom: 6px; }
+  .arm .t { font-size: 22px; color: var(--off-white); margin-bottom: 12px; }
+  .arm .r { font-size: 40px; font-family: 'Jersey 20', sans-serif; color: var(--muted); }
+  .arm.win { border-color: rgba(94, 224, 160, 0.5); background: rgba(94, 224, 160, 0.06); }
+  .arm.win .r { color: var(--green); }
+  .arm .tag { float: right; font-size: 15px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--green); }
+  .go { font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace; font-size: 19px; color: var(--muted); padding: 18px 26px; }
+  .go b { color: var(--gold); font-weight: 400; }
+
+  /* ---- closing --------------------------------------------------------- */
+  .closing .inner { flex-direction: column; align-items: flex-start; justify-content: center; }
+  .closing h2 { font-size: 104px; margin-bottom: 34px; }
+  .closing .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 26px 40px; margin-top: 14px; width: 1660px; }
+  .closing .cell { border: 1px solid var(--line); border-radius: 14px; background: rgba(40, 24, 38, 0.45); padding: 28px 30px; }
+  .closing .cell b { display: block; font-size: 28px; margin-bottom: 8px; color: var(--off-white); }
+  .closing .cell span { font-size: 22px; line-height: 1.45; color: rgba(245, 240, 244, 0.6); }
+
+  /* ---- footer lockup --------------------------------------------------- */
+  .footer {
+    position: absolute; left: 130px; bottom: 54px; z-index: 4;
+    display: flex; align-items: center; gap: 16px; font-size: 22px; color: rgba(245, 240, 244, 0.42);
+  }
+  .footer img { width: 40px; height: 40px; border-radius: 9px; }
+  .footer b { color: rgba(245, 240, 244, 0.74); font-weight: 600; }
+
+  body.single .slide { display: none; }
+  body.single .slide.active { display: block; }
+</style>
+</head>
+<body>
+
+<!-- 1 · Cover ============================================================ -->
+<section class="slide cover" data-n="1">
+  <div class="inner">
+    <div class="copy">
+      <div class="eyebrow"><span class="rule"></span> Craft CMS 5</div>
+      <h1 class="gradient-text">Schedulr</h1>
+      <p class="tagline">Scheduled notifications for Craft.<br>Web push, email and on-site, written once.</p>
+      <div class="badges">
+        <span class="badge price">$79</span>
+        <span class="badge">Lite &amp; Pro</span>
+        <span class="badge">No subscriber cap</span>
+      </div>
+    </div>
+    <div class="mark"><img src="assets/icon.svg" alt=""></div>
+  </div>
+  <div class="footer"><img src="assets/icon.svg" alt=""> <b>Schedulr</b> &nbsp;·&nbsp; justinholt.com/plugins/craft-schedulr</div>
+</section>
+
+<!-- 2 · One message, three channels ====================================== -->
+<section class="slide feature" data-n="2">
+  <div class="inner">
+    <div class="copy" style="width: 560px;">
+      <div class="eyebrow"><span class="rule"></span> Three channels</div>
+      <h2>Write it<br>once</h2>
+      <p class="lede" style="max-width: 540px;">Somebody who pressed <i>Block</i> is still reachable on-site, so each channel works out its own audience.</p>
+    </div>
+  </div>
+  <div class="stage fan">
+    <div class="card compose">
+      <div class="label">Notification</div>
+      <div class="t">The autumn menu is live</div>
+      <div class="b">Twelve new dishes, and the terrace is open again until November.</div>
+      <div class="chips"><span class="chip">Web push</span><span class="chip">Email</span><span class="chip">On-site</span></div>
+    </div>
+    <div class="card out">
+      <div class="ic"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#F28BC9" stroke-width="1.8"><rect x="6" y="2.5" width="12" height="19" rx="2.5"/><path d="M10 18.5h4" stroke-linecap="round"/></svg></div>
+      <div><div class="k">Web push</div><div class="v">The lock screen <span>· browser closed</span></div></div>
+    </div>
+    <div class="card out">
+      <div class="ic"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#F28BC9" stroke-width="1.8"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3.5 6.5 12 13l8.5-6.5" stroke-linejoin="round"/></svg></div>
+      <div><div class="k">Email</div><div class="v">Signed-in users <span>· one-click unsubscribe</span></div></div>
+    </div>
+    <div class="card out">
+      <div class="ic"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#F28BC9" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 8.5h18M13 12.5h5v4h-5z"/></svg></div>
+      <div><div class="k">On-site</div><div class="v">Any page view <span>· no permission needed</span></div></div>
+    </div>
+    <div class="card policy">
+      <div class="label">When two channels reach the same person</div>
+      <b>Every channel</b><span>to everyone reachable</span>
+      <div class="on" style="display: contents;"><b>Email the rest</b><span>only the people push did not reach</span></div>
+      <b>One per person</b><span>push, otherwise email, otherwise on-site</span>
+    </div>
+  </div>
+  <div class="footer"><img src="assets/icon.svg" alt=""> <b>Schedulr</b> &nbsp;·&nbsp; justinholt.com/plugins/craft-schedulr</div>
+</section>
+
+<!-- 3 · The next twelve sends ============================================ -->
+<section class="slide feature" data-n="3">
+  <div class="inner">
+    <div class="copy" style="width: 560px;">
+      <div class="eyebrow"><span class="rule"></span> Recurrence</div>
+      <h2>Shown,<br>not promised</h2>
+      <p class="lede" style="max-width: 540px;">A rule is expanded into real rows 90 days ahead, so the control panel lists the next twelve sends.</p>
+      <ul class="points">
+        <li>Daily, weekly, monthly, yearly</li>
+        <li>Skipped dates, windows, stop after N</li>
+        <li>Cron first, with a web fallback that says so</li>
+      </ul>
+    </div>
+  </div>
+  <div class="stage card sched">
+    <div class="rule-line">
+      <div class="r">Every <em>2 weeks</em> on Tuesday at <em>09:00</em></div>
+      <div class="runner"><i></i> Cron · seen 14s ago</div>
+    </div>
+    <div class="sends">
+      <div class="send first"><span class="n">01</span><span class="d">Tue 6 Oct 2026</span><span class="s">Next</span></div>
+      <div class="send"><span class="n">07</span><span class="d">Tue 29 Dec 2026</span><span class="s">Pending</span></div>
+      <div class="send"><span class="n">02</span><span class="d">Tue 20 Oct 2026</span><span class="s">Pending</span></div>
+      <div class="send"><span class="n">08</span><span class="d">Tue 12 Jan 2027</span><span class="s">Pending</span></div>
+      <div class="send"><span class="n">03</span><span class="d">Tue 3 Nov 2026</span><span class="s">Pending</span></div>
+      <div class="send"><span class="n">09</span><span class="d">Tue 26 Jan 2027</span><span class="s">Pending</span></div>
+      <div class="send"><span class="n">04</span><span class="d">Tue 17 Nov 2026</span><span class="s">Pending</span></div>
+      <div class="send"><span class="n">10</span><span class="d">Tue 9 Feb 2027</span><span class="s">Pending</span></div>
+      <div class="send"><span class="n">05</span><span class="d">Tue 1 Dec 2026</span><span class="s">Pending</span></div>
+      <div class="send"><span class="n">11</span><span class="d">Tue 23 Feb 2027</span><span class="s">Pending</span></div>
+      <div class="send"><span class="n">06</span><span class="d">Tue 15 Dec 2026</span><span class="s">Pending</span></div>
+      <div class="send"><span class="n">12</span><span class="d">Tue 9 Mar 2027</span><span class="s">Pending</span></div>
+    </div>
+    <div class="foot">The runner's query is one indexed lookup: <b>pending, and due by now</b>.</div>
+  </div>
+  <div class="footer"><img src="assets/icon.svg" alt=""> <b>Schedulr</b> &nbsp;·&nbsp; justinholt.com/plugins/craft-schedulr</div>
+</section>
+
+<!-- 4 · Their own time zone ============================================== -->
+<section class="slide feature" data-n="4">
+  <div class="inner">
+    <div class="copy" style="width: 560px;">
+      <div class="eyebrow"><span class="rule"></span> Pro</div>
+      <h2>09:00,<br>wherever<br>they are</h2>
+      <p class="lede" style="max-width: 540px;">One send in each subscriber's own time zone is one row per zone, each with its own instant.</p>
+    </div>
+  </div>
+  <div class="stage card zones">
+    <div class="head"><span class="label">Subscriber's zone</span><span class="label">Local</span><span class="label">Sent at (UTC)</span></div>
+    <div class="zone"><span class="tz">Pacific/Auckland<span>NZDT</span></span><span class="local">09:00</span><span class="utc">Mon 12 Oct 20:00</span></div>
+    <div class="zone"><span class="tz">Asia/Tokyo<span>JST</span></span><span class="local">09:00</span><span class="utc">Tue 13 Oct 00:00</span></div>
+    <div class="zone"><span class="tz">Asia/Kolkata<span>IST</span></span><span class="local">09:00</span><span class="utc">Tue 13 Oct 03:30</span></div>
+    <div class="zone"><span class="tz">Europe/Berlin<span>CEST</span></span><span class="local">09:00</span><span class="utc">Tue 13 Oct 07:00</span></div>
+    <div class="zone"><span class="tz">Europe/London<span>BST</span></span><span class="local">09:00</span><span class="utc">Tue 13 Oct 08:00</span></div>
+    <div class="zone"><span class="tz">America/New_York<span>EDT</span></span><span class="local">09:00</span><span class="utc">Tue 13 Oct 13:00</span></div>
+    <div class="zone"><span class="tz">America/Chicago<span>CDT</span></span><span class="local">09:00</span><span class="utc">Tue 13 Oct 14:00</span></div>
+    <div class="zone"><span class="tz">America/Los_Angeles<span>PDT</span></span><span class="local">09:00</span><span class="utc">Tue 13 Oct 16:00</span></div>
+    <div class="more">Recurrence walks dates and applies the time last, so 09:00 stays 09:00 through a clock change.</div>
+  </div>
+  <div class="footer"><img src="assets/icon.svg" alt=""> <b>Schedulr</b> &nbsp;·&nbsp; justinholt.com/plugins/craft-schedulr</div>
+</section>
+
+<!-- 5 · Audiences and automations ======================================== -->
+<section class="slide feature" data-n="5">
+  <div class="inner">
+    <div class="copy" style="width: 560px;">
+      <div class="eyebrow"><span class="rule"></span> Pro</div>
+      <h2>Who, and<br>what sets<br>it off</h2>
+      <p class="lede" style="max-width: 540px;">Audiences are built from conditions and count themselves as you edit. Automations send when something happens.</p>
+    </div>
+  </div>
+  <div class="stage aud">
+    <div class="card builder">
+      <div class="top"><span class="name">Lapsed readers</span><span class="count"><b>4,812</b>match now</span></div>
+      <div class="cond"><div><em>Reachability</em>Subscribed to push</div><div class="op">is</div><div>Yes</div></div>
+      <div class="cond"><div><em>Behaviour</em>Last visit</div><div class="op">more than</div><div>30 days ago</div></div>
+      <div class="cond"><div><em>Who and where</em>Browser language</div><div class="op">is one of</div><div>de, nl, fr</div></div>
+    </div>
+    <div class="triggers">
+      <div class="card trig"><div class="k">Entry published</div><div class="v">A new article <span>in News</span></div></div>
+      <div class="card trig"><div class="k">User registered</div><div class="v">A welcome <span>for new accounts</span></div></div>
+      <div class="card trig"><div class="k">Inactivity</div><div class="v">A win-back <span>after N days away</span></div></div>
+    </div>
+  </div>
+  <div class="footer"><img src="assets/icon.svg" alt=""> <b>Schedulr</b> &nbsp;·&nbsp; justinholt.com/plugins/craft-schedulr</div>
+</section>
+
+<!-- 6 · What happened ===================================================== -->
+<section class="slide feature" data-n="6">
+  <div class="inner">
+    <div class="copy" style="width: 560px;">
+      <div class="eyebrow"><span class="rule"></span> Pro</div>
+      <h2>What<br>happened</h2>
+      <p class="lede" style="max-width: 540px;">A per-send funnel, an A/B winner declared only on enough data, and a ledger that outlives what it records.</p>
+    </div>
+  </div>
+  <div class="stage results">
+    <div class="card funnel">
+      <div class="label">The autumn menu is live</div>
+      <div class="bar-row"><span class="k">Targeted</span><div class="track"><div class="fill" style="width: 100%;"></div></div><span class="v">12,400</span></div>
+      <div class="bar-row"><span class="k">Delivered</span><div class="track"><div class="fill" style="width: 96%;"></div></div><span class="v">11,930</span></div>
+      <div class="bar-row"><span class="k">Displayed</span><div class="track"><div class="fill" style="width: 80%;"></div></div><span class="v">9,870</span></div>
+      <div class="bar-row"><span class="k">Clicked</span><div class="track"><div class="fill" style="width: 9.2%;"></div></div><span class="v">1,140</span></div>
+    </div>
+    <div class="card ab">
+      <div class="label">A/B · every arm past 100 deliveries</div>
+      <div class="arm"><div class="k">Variant A</div><div class="t">The autumn menu is live</div><div class="r">8.1%</div></div>
+      <div class="arm win"><span class="tag">Winner</span><div class="k">Variant B</div><div class="t">Twelve new dishes tonight</div><div class="r">11.4%</div></div>
+    </div>
+    <div class="card go">/schedulr/go?sr_n=42&amp;sr_v=7&amp;sr_s=1234&amp;sr_k=<b>3f9a0c51b2e4</b> &nbsp;IDs only, signed</div>
+  </div>
+  <div class="footer"><img src="assets/icon.svg" alt=""> <b>Schedulr</b> &nbsp;·&nbsp; justinholt.com/plugins/craft-schedulr</div>
+</section>
+
+<!-- 7 · Closing ========================================================== -->
+<section class="slide closing" data-n="7">
+  <div class="inner">
+    <div class="eyebrow"><span class="rule"></span> For Craft CMS 5</div>
+    <h2>Lite sends. Pro decides who,<br>when for them, and what happened.</h2>
+    <div class="grid">
+      <div class="cell"><b>No subscriber cap</b><span>In either edition. Pricing that grows with your success is the wrong shape for this.</span></div>
+      <div class="cell"><b>A downgrade, not a wall</b><span>A lapsed licence deletes nothing and stops no send.</span></div>
+      <div class="cell"><b>Works alongside PWA</b><span>Shares its keys and its service worker instead of fighting it for the scope.</span></div>
+      <div class="cell"><b>Pure PHP push</b><span>RFC 8291 encryption and VAPID, pinned to the RFC's own test vector.</span></div>
+      <div class="cell"><b>Quiet hours and caps</b><span>A repeating send that lands at 3am waits for morning instead of being dropped.</span></div>
+      <div class="cell"><b>Nothing to build</b><span>No build step and no runtime dependencies beyond Craft and OpenSSL.</span></div>
+    </div>
+  </div>
+  <div class="footer"><img src="assets/icon.svg" alt=""> <b>Schedulr</b> &nbsp;·&nbsp; justinholt.com/plugins/craft-schedulr</div>
+</section>
+
+<script>
+  var n = new URLSearchParams(location.search).get('s');
+  if (n) {
+    document.body.classList.add('single');
+    var el = document.querySelector('.slide[data-n="' + n + '"]');
+    if (el) el.classList.add('active');
+  }
+</script>
+</body>
+</html>

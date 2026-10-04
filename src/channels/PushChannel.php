@@ -34,6 +34,9 @@ use Throwable;
  */
 class PushChannel implements ChannelInterface
 {
+    /** Seconds a push service has to answer. `SendBatch` sizes its TTR from this. */
+    public const REQUEST_TIMEOUT = 10;
+
     /** How long a push service should hold a message for a device that is offline. Four weeks. */
     private const TTL = 2419200;
 
@@ -58,6 +61,14 @@ class PushChannel implements ChannelInterface
         }
 
         $plugin = Plugin::getInstance();
+        $endpoint = (string)$subscriber->endpoint;
+
+        // Checked again here, not only at subscribe time. Rows also arrive by PWA adoption and by
+        // anything a site writes directly, and this is the last moment before the server makes the
+        // request — so it is the one check that cannot be routed around.
+        if (!$plugin->subscribers->isAcceptableEndpoint($endpoint)) {
+            return SendResult::failed('The endpoint is not on a recognised push service.');
+        }
 
         try {
             $payload = Json::encode($notification->toPayload($overrides, $subscriber->id, $variantId));
@@ -73,7 +84,7 @@ class PushChannel implements ChannelInterface
 
             $headers = [
                 'Authorization' => Encryptor::vapidHeader(
-                    (string)$subscriber->endpoint,
+                    $endpoint,
                     $this->subject(),
                     $plugin->keys->getPublicKey(),
                     $plugin->keys->getPrivateKey(),
@@ -93,10 +104,14 @@ class PushChannel implements ChannelInterface
                 $headers['Topic'] = substr((string)preg_replace('/[^A-Za-z0-9_-]/', '', $tag), 0, 32);
             }
 
-            $response = Craft::createGuzzleClient(['timeout' => 10])->request('POST', (string)$subscriber->endpoint, [
+            $response = Craft::createGuzzleClient(['timeout' => self::REQUEST_TIMEOUT])->request('POST', $endpoint, [
                 'headers' => $headers,
                 'body' => $body,
                 'http_errors' => false,
+                // A push service answers; it does not redirect. Following a 3xx would hand the
+                // allowlist's decision to whoever controls the response — and Guzzle re-sends the
+                // body to wherever it is pointed.
+                'allow_redirects' => false,
             ]);
 
             $code = $response->getStatusCode();
@@ -116,22 +131,39 @@ class PushChannel implements ChannelInterface
                 Plugin::error(sprintf(
                     'A push service rejected Schedulr’s VAPID credentials (%d). Check the push subject setting and the keypair. Response: %s',
                     $code,
-                    substr((string)$response->getBody(), 0, 300),
+                    $this->clean((string)$response->getBody(), 300),
                 ));
 
                 return SendResult::failed('The push service rejected this site’s credentials.', $code);
             }
 
-            return SendResult::failed(substr((string)$response->getBody(), 0, 500) ?: 'Unknown push failure.', $code);
+            return SendResult::failed($this->clean((string)$response->getBody(), 500) ?: 'Unknown push failure.', $code);
         } catch (ConnectException $e) {
-            return SendResult::failed('Could not reach the push service: ' . $e->getMessage());
+            return SendResult::failed('Could not reach the push service: ' . $this->clean($e->getMessage(), 500));
         } catch (RequestException $e) {
-            return SendResult::failed($e->getMessage(), $e->getResponse()?->getStatusCode());
+            return SendResult::failed($this->clean($e->getMessage(), 500), $e->getResponse()?->getStatusCode());
         } catch (Throwable $e) {
-            Plugin::error('Push send failed: ' . $e->getMessage());
+            Plugin::error('Push send failed: ' . $this->clean($e->getMessage(), 500));
 
-            return SendResult::failed($e->getMessage());
+            return SendResult::failed($this->clean($e->getMessage(), 500));
         }
+    }
+
+    /**
+     * Text from a push service or an exception, made fit for a log line and the ledger.
+     *
+     * The response body is chosen by a remote server and lands in the log, so newlines are flattened
+     * (one forged "line" in a log is a forged log entry) and it is capped. Exception messages from
+     * Guzzle quote the full request URI, and the endpoint's path *is* the subscription credential —
+     * anyone holding it can unsubscribe that device — so every URL is cut back to its host before it is
+     * stored where the ledger export and the CP can show it.
+     */
+    private function clean(string $text, int $max): string
+    {
+        $text = (string)preg_replace('~(https?://[^/\s?#]+)[^\s)]*~i', '$1/…', $text);
+        $text = (string)preg_replace('/[\x00-\x1f\x7f]+/', ' ', $text);
+
+        return mb_substr(trim($text), 0, $max);
     }
 
     /**

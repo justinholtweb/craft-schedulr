@@ -84,6 +84,9 @@ class Plugin extends BasePlugin
     public bool $hasCpSection = true;
     public bool $hasCpSettings = true;
 
+    /** The settings screens render read-only when admin changes are disallowed, so keep the link. */
+    public bool $hasReadOnlyCpSettings = true;
+
     public static function editions(): array
     {
         return [self::EDITION_LITE, self::EDITION_PRO];

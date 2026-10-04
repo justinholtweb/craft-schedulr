@@ -6,7 +6,6 @@ namespace justinholtweb\schedulr\console\controllers;
 
 use craft\console\Controller;
 use craft\helpers\Console;
-use justinholtweb\schedulr\models\Occurrence;
 use justinholtweb\schedulr\Plugin;
 use yii\console\ExitCode;
 

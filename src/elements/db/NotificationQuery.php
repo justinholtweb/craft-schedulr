@@ -6,7 +6,6 @@ namespace justinholtweb\schedulr\elements\db;
 
 use craft\elements\db\ElementQuery;
 use craft\helpers\Db;
-use justinholtweb\schedulr\db\Table;
 use justinholtweb\schedulr\elements\Notification;
 
 /**

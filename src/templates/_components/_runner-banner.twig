@@ -2,42 +2,51 @@
   The runner's health, stated plainly.
 
   This banner is the whole reason the runner has three states rather than two. "Nothing is running
-  this" and "something is running this, late" need different sentences, because the fix is different —
+  this" and "something is running this, late" need different sentences, because the fix is different,
   and a scheduler that looks scheduled while doing nothing is the failure the design is arranged to
   avoid. So it says so, on every screen where somebody might be wondering.
+
+  `blockquote.note` is Craft 5's callout: red by default, amber with `.warning`.
 #}
 {% set state = health.state ?? 'manual' %}
+{% set command = '<code>php craft schedulr/run --quiet</code>' %}
+
+{% if state in ['stalled', 'web', 'manual'] %}
+    {% css %}
+        .schedulr-banner { margin-block: 0 var(--xl); }
+        .schedulr-banner p + p { margin-block-start: var(--s); }
+    {% endcss %}
+{% endif %}
 
 {% if state == 'stalled' %}
-    <div class="error-notice" style="margin-bottom: 24px;">
+    <blockquote class="note schedulr-banner" role="alert">
         <p><strong>{{ 'Schedulr has not heard from cron.'|t('schedulr') }}</strong></p>
         <p>
             {{ 'The runner is set to cron only, so nothing is sending scheduled notifications right now.'|t('schedulr') }}
             {{ 'Add a one-minute cron job running {command}, or switch the runner to “Cron if available, web requests if not”.'|t('schedulr', {
-                command: '<code>php craft schedulr/run --quiet</code>'
+                command: command
             })|raw }}
         </p>
         {% if health.overdue ?? 0 %}
-            <p>{{ '{count} send(s) are overdue.'|t('schedulr', { count: health.overdue }) }}</p>
+            <p>{{ '{count, plural, =1{1 send is} other{# sends are}} overdue.'|t('schedulr', { count: health.overdue }) }}</p>
         {% endif %}
-    </div>
+    </blockquote>
 {% elseif state == 'web' %}
-    <div class="warning with-icon" style="margin-bottom: 24px;">
+    <blockquote class="note warning schedulr-banner">
+        <p><strong>{{ 'Sending by web requests.'|t('schedulr') }}</strong></p>
         <p>
-            <strong>{{ 'Sending by web requests.'|t('schedulr') }}</strong>
-            {{ 'Schedulr has not heard from cron, so due notifications are being sent when somebody visits the site — which means a quiet site sends late.'|t('schedulr') }}
-            {{ 'Add {command} to cron, once a minute, to send on time.'|t('schedulr', {
-                command: '<code>php craft schedulr/run --quiet</code>'
+            {{ 'Scheduled notifications are being sent by web requests instead, so a quiet site will send late. Add a one-minute cron job running {command} to send on time.'|t('schedulr', {
+                command: command
             })|raw }}
         </p>
-    </div>
+    </blockquote>
 {% elseif state == 'manual' %}
-    <div class="warning with-icon" style="margin-bottom: 24px;">
+    <blockquote class="note warning schedulr-banner">
+        <p><strong>{{ 'Nothing is sending scheduled notifications.'|t('schedulr') }}</strong></p>
         <p>
-            <strong>{{ 'Nothing is sending scheduled notifications.'|t('schedulr') }}</strong>
             {{ 'The runner is switched off, so schedules will not fire until something calls {command}.'|t('schedulr', {
-                command: '<code>craft schedulr/run</code>'
+                command: '<code>php craft schedulr/run</code>'
             })|raw }}
         </p>
-    </div>
+    </blockquote>
 {% endif %}

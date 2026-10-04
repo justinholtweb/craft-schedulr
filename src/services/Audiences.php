@@ -9,13 +9,11 @@ use craft\base\Component;
 use craft\db\Query;
 use craft\db\Table as CraftTable;
 use craft\helpers\Db;
-use craft\helpers\Json;
 use craft\helpers\StringHelper;
 use DateTime;
 use justinholtweb\schedulr\db\Table;
 use justinholtweb\schedulr\models\Audience;
 use justinholtweb\schedulr\models\Delivery;
-use justinholtweb\schedulr\Plugin;
 
 /**
  * Segments, and the SQL they compile to.

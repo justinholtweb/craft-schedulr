@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace justinholtweb\schedulr\controllers;
 
 use Craft;
-use craft\helpers\Json;
 use craft\web\Controller;
 use justinholtweb\schedulr\models\Audience;
 use justinholtweb\schedulr\models\Edition;
@@ -102,6 +101,20 @@ class AudiencesController extends Controller
 
         $siteId = $request->getBodyParam('siteId');
         $audience->siteId = $siteId !== null && $siteId !== '' ? (int)$siteId : null;
+
+        // Scoping an audience to a site is authoring content for that site, so it needs the same
+        // `editSite` permission Craft asks for anywhere else on a multi-site install.
+        if ($audience->siteId !== null) {
+            $site = Craft::$app->getSites()->getSiteById($audience->siteId);
+
+            if ($site === null) {
+                throw new \yii\web\BadRequestHttpException('Invalid site.');
+            }
+
+            if (Craft::$app->getIsMultiSite()) {
+                $this->requirePermission('editSite:' . $site->uid);
+            }
+        }
 
         $audience->setCondition([
             'match' => $request->getBodyParam('match') === 'any' ? 'any' : 'all',

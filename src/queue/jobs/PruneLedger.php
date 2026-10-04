@@ -5,8 +5,12 @@ declare(strict_types=1);
 namespace justinholtweb\schedulr\queue\jobs;
 
 use Craft;
+use craft\helpers\Db;
 use craft\queue\BaseJob;
+use DateTime;
+use justinholtweb\schedulr\db\Table;
 use justinholtweb\schedulr\Plugin;
+use justinholtweb\schedulr\services\Deliveries;
 
 /**
  * Housekeeping, hooked to Craft's garbage collection.
@@ -27,14 +31,23 @@ class PruneLedger extends BaseJob
     {
         $plugin = Plugin::getInstance();
 
+        // Every table is pruned in chunks of ids rather than with one unbounded DELETE — see
+        // `Deliveries::deleteInChunks()` for why a single statement over a year of rows is a nightly
+        // job that silently deletes nothing.
         $this->setProgress($queue, 0, Craft::t('schedulr', 'Pruning deliveries'));
         $deliveries = $plugin->deliveries->prune($this->ledgerDays);
 
         $this->setProgress($queue, 0.4, Craft::t('schedulr', 'Pruning events'));
-        $events = $plugin->analytics->prune($this->ledgerDays);
+        $events = $this->ledgerDays > 0
+            ? Deliveries::deleteInChunks(Table::EVENTS, ['<', 'dateCreated', $this->cutoff($this->ledgerDays)])
+            : 0;
 
         $this->setProgress($queue, 0.8, Craft::t('schedulr', 'Pruning subscribers'));
-        $subscribers = $plugin->subscribers->prune($this->subscriberDays);
+        // The same condition as `Subscribers::prune()`: not seen for the retention period. Deleting a
+        // subscriber leaves their ledger rows behind with a null subscriber, which is the point.
+        $subscribers = $this->subscriberDays > 0
+            ? Deliveries::deleteInChunks(Table::SUBSCRIBERS, ['<', 'dateLastSeen', $this->cutoff($this->subscriberDays)])
+            : 0;
 
         $this->setProgress($queue, 1);
 
@@ -46,6 +59,11 @@ class PruneLedger extends BaseJob
                 $subscribers,
             ));
         }
+    }
+
+    private function cutoff(int $days): string
+    {
+        return (string)Db::prepareDateForDb((new DateTime())->modify("-{$days} days"));
     }
 
     protected function defaultDescription(): ?string

@@ -8,13 +8,12 @@ use Craft;
 use craft\base\Element;
 use craft\elements\actions\Delete;
 use craft\elements\db\ElementQueryInterface;
+use craft\enums\Color;
 use craft\helpers\Cp;
 use craft\helpers\Db;
 use craft\helpers\Html;
 use craft\helpers\Json;
 use craft\helpers\UrlHelper;
-use craft\web\CpScreenResponseBehavior;
-use craft\enums\Color;
 use DateTime;
 use justinholtweb\schedulr\db\Table;
 use justinholtweb\schedulr\elements\db\NotificationQuery;
@@ -22,7 +21,6 @@ use justinholtweb\schedulr\helpers\Data;
 use justinholtweb\schedulr\models\Audience;
 use justinholtweb\schedulr\models\Schedule;
 use justinholtweb\schedulr\Plugin;
-use yii\web\Response;
 
 /**
  * One notification, composed once and delivered over whichever channels are enabled.
@@ -327,18 +325,34 @@ class Notification extends Element
 
     // ------------------------------------------------------------------------------- CP
 
+    // Each asks `parent::canX()` first, which is what fires `Element::EVENT_AUTHORIZE_*` and lets a
+    // site or another plugin grant access Schedulr's own permissions would not. Skipping it makes
+    // those events silently inert for this element type.
+
     public function canView(\craft\elements\User $user): bool
     {
+        if (parent::canView($user)) {
+            return true;
+        }
+
         return $user->can(Plugin::PERMISSION_VIEW_NOTIFICATIONS);
     }
 
     public function canSave(\craft\elements\User $user): bool
     {
+        if (parent::canSave($user)) {
+            return true;
+        }
+
         return $user->can(Plugin::PERMISSION_MANAGE_NOTIFICATIONS);
     }
 
     public function canDelete(\craft\elements\User $user): bool
     {
+        if (parent::canDelete($user)) {
+            return true;
+        }
+
         // A notification that has gone out is a record of something that happened. Deleting it is
         // allowed — a site is entitled to tidy up — but it is its own permission, because the
         // ledger it anchors is the only answer to "what did we send in March".
@@ -347,6 +361,10 @@ class Notification extends Element
 
     public function canDuplicate(\craft\elements\User $user): bool
     {
+        if (parent::canDuplicate($user)) {
+            return true;
+        }
+
         return $user->can(Plugin::PERMISSION_MANAGE_NOTIFICATIONS);
     }
 
@@ -360,7 +378,7 @@ class Notification extends Element
         return $this->getCpEditUrl();
     }
 
-    protected static function defineSources(string $context = null): array
+    protected static function defineSources(?string $context = null): array
     {
         $sources = [
             [
@@ -393,7 +411,7 @@ class Notification extends Element
         return $sources;
     }
 
-    protected static function defineActions(string $source = null): array
+    protected static function defineActions(?string $source = null): array
     {
         $actions = [];
 
@@ -455,7 +473,7 @@ class Notification extends Element
                 fn(string $c) => (string)(self::channelOptions()[$c] ?? $c),
                 $this->getChannels(),
             ))),
-            'audience' => Html::encode($this->getAudience()?->name ?? Craft::t('schedulr', 'Everyone')),
+            'audience' => Html::encode($this->getAudience()->name ?? Craft::t('schedulr', 'Everyone')),
             'nextSend' => $this->nextSendHtml(),
             'clickRate' => $this->clickRateHtml(),
             default => parent::attributeHtml($attribute),
@@ -464,7 +482,7 @@ class Notification extends Element
 
     private function statusHtml(): string
     {
-        $status = self::statuses()[$this->state] ?? ['label' => $this->state, 'color' => 'gray'];
+        $status = self::statuses()[$this->state] ?? ['label' => $this->state, 'color' => Color::Gray];
 
         return Cp::statusLabelHtml([
             'color' => $status['color'],
@@ -571,7 +589,66 @@ class Notification extends Element
             [['audienceId', 'sourceElementId', 'templateId'], 'integer'],
             [['requireInteraction'], 'boolean'],
             [['url', 'imageUrl', 'iconUrl', 'badgeUrl'], 'string', 'max' => 1000],
+            [['url', 'imageUrl', 'iconUrl', 'badgeUrl'], 'validateSafeUrl'],
+            // Not skipped when empty — an empty list is valid, and the rule has to run to look inside a
+            // non-empty one.
+            [['buttons'], 'validateButtons', 'skipOnEmpty' => false],
         ]);
+    }
+
+    /**
+     * Whether a URL is safe to put in an `href`, a `src`, or a redirect: http(s), or a path with no
+     * scheme at all.
+     *
+     * Every URL on a notification ends up in at least one of those — the on-site toast's link, the
+     * worker's `openWindow()`, the email's button, and `/schedulr/go`'s redirect — and a `javascript:`
+     * one in any of them runs script on the site's own origin for whoever clicks. So the rule is an
+     * allowlist of two schemes, not a blocklist of the dangerous ones: `JaVaScRiPt:`, `java\tscript:`
+     * and `data:` are all the same attack spelled differently.
+     *
+     * Relative paths (`/news`, `news/today`) pass, because "relative paths resolve against the site"
+     * is a documented behaviour of the icon settings.
+     */
+    public static function isSafeUrl(string $url): bool
+    {
+        $url = trim($url);
+
+        if ($url === '') {
+            return true;
+        }
+
+        // Browsers strip tabs and newlines out of a URL before parsing its scheme, so `java\nscript:`
+        // is `javascript:` to them. Refusing control characters outright closes that whole family.
+        if (preg_match('/[\x00-\x1f\x7f]/', $url)) {
+            return false;
+        }
+
+        if (preg_match('~^https?://[^/?#\\\\]~i', $url)) {
+            return true;
+        }
+
+        // No scheme at all: nothing before the first `/`, `?` or `#` may contain a colon.
+        return !preg_match('~^[^/?#]*:~', $url);
+    }
+
+    /** @internal Yii inline validator. */
+    public function validateSafeUrl(string $attribute): void
+    {
+        if (!self::isSafeUrl((string)$this->$attribute)) {
+            $this->addError($attribute, Craft::t('schedulr', 'Use an http(s) URL or a path on this site.'));
+        }
+    }
+
+    /** @internal Yii inline validator. */
+    public function validateButtons(string $attribute): void
+    {
+        foreach ($this->getButtons() as $button) {
+            if (!self::isSafeUrl($button['url'])) {
+                $this->addError($attribute, Craft::t('schedulr', 'Button links must be an http(s) URL or a path on this site.'));
+
+                return;
+            }
+        }
     }
 
     /**
@@ -620,10 +697,17 @@ class Notification extends Element
         $buttons = $this->getButtons();
 
         if ($buttons !== []) {
-            $payload['actions'] = array_map(static fn(array $b, int $i) => [
+            $analytics = Plugin::getInstance()->analytics;
+
+            // Each button goes through the tracked redirect with its own index, which is how
+            // `/schedulr/go` knows to look up that button's destination — and how a button click is
+            // counted at all. A button with no URL of its own falls back to the notification's.
+            $payload['actions'] = array_map(fn(array $b, int $i) => [
                 'action' => 'a' . $i,
                 'title' => $b['title'],
-                'url' => $b['url'],
+                'url' => $b['url'] !== ''
+                    ? $analytics->trackedUrl($b['url'], $this->id, $variantId, $subscriberId, 'push', $i)
+                    : $payload['url'],
             ], $buttons, array_keys($buttons));
         }
 
@@ -637,6 +721,12 @@ class Notification extends Element
 
         if ($subscriberId !== null) {
             $payload['s'] = $subscriberId;
+
+            // What lets the worker's display and dismiss reports be attributed without letting
+            // anybody else write events against this subscriber. See `Analytics::eventSignature()`.
+            if ($this->id !== null) {
+                $payload['k'] = Plugin::getInstance()->analytics->eventSignature($this->id, $variantId, $subscriberId);
+            }
         }
 
         return $payload;

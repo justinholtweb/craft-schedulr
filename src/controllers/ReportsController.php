@@ -129,7 +129,7 @@ class ReportsController extends Controller
         fputcsv($handle, ['id', 'subscriberId', 'channel', 'status', 'statusCode', 'error', 'sentAt']);
 
         foreach ($plugin->deliveries->each(['notificationId' => $notificationId]) as $row) {
-            fputcsv($handle, [
+            fputcsv($handle, self::csvSafe([
                 $row['id'],
                 $row['subscriberId'],
                 $row['channel'],
@@ -137,7 +137,7 @@ class ReportsController extends Controller
                 $row['statusCode'],
                 $row['error'],
                 $row['dateCreated'],
-            ]);
+            ]));
         }
 
         rewind($handle);
@@ -145,5 +145,31 @@ class ReportsController extends Controller
         fclose($handle);
 
         return $response;
+    }
+
+    /**
+     * A CSV row with every cell a spreadsheet would treat as a formula defused.
+     *
+     * The ledger's `error` column is text a remote push service chose, and the subscriber export
+     * carries browser-reported fields — so a cell beginning `=HYPERLINK(...)` or `@SUM(...)` is
+     * attacker-authored, and Excel and Sheets will evaluate it when the file is opened. The OWASP
+     * remedy: prefix any cell starting with `=`, `+`, `-`, `@`, tab or carriage return with a single
+     * quote, which the spreadsheet shows as text. Numbers are left alone, so a negative status code
+     * stays a number.
+     *
+     * @param array<int, mixed> $cells
+     * @return array<int, mixed>
+     */
+    public static function csvSafe(array $cells): array
+    {
+        return array_map(static function($cell) {
+            // Numeric strings too: the database hands integers back as strings on some drivers, and
+            // `-1` is a number, not a formula.
+            if (!is_string($cell) || $cell === '' || is_numeric($cell)) {
+                return $cell;
+            }
+
+            return in_array($cell[0], ['=', '+', '-', '@', "\t", "\r"], true) ? "'" . $cell : $cell;
+        }, $cells);
     }
 }

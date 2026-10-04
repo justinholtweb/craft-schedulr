@@ -1,0 +1,35 @@
+{#
+  A row of headline numbers.
+
+  One component rather than four copies, so every screen's tiles share their spacing, their type and
+  their markup: a `<dl>`, because each tile is a term and its value, which is what a screen reader
+  needs to announce "Pending, 12" rather than two unrelated lines.
+
+  Pass `stats`: a list of `{ label, value, tone? }`. `value` may be null, which renders a muted
+  "None yet" rather than a bare dash. `tone: 'error'` colours the value with the CP's error token and
+  adds a visually-hidden word, so the meaning is never carried by colour alone.
+#}
+{% css %}
+    .schedulr-stats { display: flex; flex-wrap: wrap; gap: var(--m) var(--xl); margin-block: 0 var(--xl); }
+    .schedulr-stats > div { min-inline-size: 7rem; }
+    .schedulr-stats dt { color: var(--light-text-color); font-size: 0.8125rem; }
+    .schedulr-stats dd { margin: 0; font-size: 1.375rem; line-height: 1.3; font-variant-numeric: tabular-nums; }
+    .schedulr-stats dd.error { color: var(--error-color); }
+    .schedulr-stats dd .light { font-size: 0.875rem; }
+{% endcss %}
+
+<dl class="schedulr-stats">
+    {% for stat in stats %}
+        <div>
+            <dt>{{ stat.label }}</dt>
+            <dd{% if (stat.tone ?? null) == 'error' %} class="error"{% endif %}>
+                {% if stat.value is null %}
+                    <span class="light">{{ 'None yet'|t('schedulr') }}</span>
+                {% else %}
+                    {{ stat.value }}
+                    {% if (stat.tone ?? null) == 'error' %}<span class="visually-hidden">{{ '(needs attention)'|t('schedulr') }}</span>{% endif %}
+                {% endif %}
+            </dd>
+        </div>
+    {% endfor %}
+</dl>

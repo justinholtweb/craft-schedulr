@@ -1,0 +1,52 @@
+{#
+  Small display helpers shared by the CP screens, so a raw stored value (`onsite`, `gone`) never
+  reaches the page untranslated, and state is never carried by colour alone: every status dot sits
+  beside its word.
+#}
+
+{# A muted word in place of a bare dash. A column of dashes reads as missing data. #}
+{% macro muted(text) -%}
+    <span class="light">{{ text }}</span>
+{%- endmacro %}
+
+{# A status dot and its label. `status` is one of Craft's status classes (on, pending, off, disabled). #}
+{% macro status(status, label) -%}
+    <span class="nowrap"><span class="status {{ status }}" aria-hidden="true"></span>{{ label }}</span>
+{%- endmacro %}
+
+{% macro subscriberState(subscriber) -%}
+    {% set status = subscriber.unsubscribed
+        ? 'off'
+        : (subscriber.isPushable() ? 'on' : (subscriber.dateDeclined ? 'pending' : 'disabled')) %}
+    {{ _self.status(status, subscriber.getStateLabel()) }}
+{%- endmacro %}
+
+{% macro channelLabel(channel) -%}
+    {{ {
+        push: 'Web push'|t('schedulr'),
+        email: 'Email'|t('schedulr'),
+        onsite: 'On-site'|t('schedulr'),
+    }[channel] ?? channel }}
+{%- endmacro %}
+
+{% macro deliveryStatusLabel(status) -%}
+    {{ {
+        queued: 'Queued'|t('schedulr'),
+        delivered: 'Delivered'|t('schedulr'),
+        failed: 'Failed'|t('schedulr'),
+        gone: 'Device gone'|t('schedulr'),
+        skipped: 'Skipped'|t('schedulr'),
+    }[status] ?? status }}
+{%- endmacro %}
+
+{# A delivery's status as dot + word, with the push service's HTTP code alongside when there is one. #}
+{% macro deliveryStatus(status, code) -%}
+    {{ _self.status({
+        delivered: 'on',
+        queued: 'pending',
+        failed: 'off',
+        gone: 'disabled',
+        skipped: 'disabled',
+    }[status] ?? 'disabled', _self.deliveryStatusLabel(status)) }}
+    {%- if code %} <span class="light">{{ 'HTTP {code}'|t('schedulr', { code: code }) }}</span>{% endif %}
+{%- endmacro %}

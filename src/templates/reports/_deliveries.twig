@@ -1,4 +1,5 @@
 {% extends 'schedulr/_layouts/cp' %}
+{% import 'schedulr/_components/_macros' as ui %}
 
 {% set selectedSubnavItem = 'notifications' %}
 {% set crumbs = [
@@ -15,197 +16,203 @@
 
 {% block content %}
     {% if funnel|length %}
-        <div class="flex" style="gap: 32px; margin-bottom: 24px;">
-            {% for key, label in {
-                targeted: 'Targeted'|t('schedulr'),
-                delivered: 'Delivered'|t('schedulr'),
-                failed: 'Failed'|t('schedulr'),
-                displayed: 'Shown'|t('schedulr'),
-                clicked: 'Clicked'|t('schedulr'),
-            } %}
-                <div>
-                    <div class="light smalltext">{{ label }}</div>
-                    <div style="font-size: 20px;">{{ funnel[key]|number_format }}</div>
-                </div>
-            {% endfor %}
-            <div>
-                <div class="light smalltext">{{ 'Click rate'|t('schedulr') }}</div>
-                {# Null, not zero. "0%" against zero deliveries reads as a campaign that failed rather
-                   than one that has not been sent — and it is the number people screenshot. #}
-                <div style="font-size: 20px;">{{ funnel.clickRate is null ? '—' : funnel.clickRate ~ '%' }}</div>
-            </div>
-        </div>
+        {#
+          Click rate is null, not zero, when nothing has been delivered. "0%" against zero deliveries
+          reads as a campaign that failed rather than one that has not been sent, and it is the
+          number people screenshot.
+        #}
+        {% include 'schedulr/_components/_stats' with {
+            stats: [
+                { label: 'Targeted'|t('schedulr'), value: funnel.targeted|number_format },
+                { label: 'Delivered'|t('schedulr'), value: funnel.delivered|number_format },
+                { label: 'Failed'|t('schedulr'), value: funnel.failed|number_format, tone: funnel.failed ? 'error' : null },
+                { label: 'Shown'|t('schedulr'), value: funnel.displayed|number_format },
+                { label: 'Clicked'|t('schedulr'), value: funnel.clicked|number_format },
+                { label: 'Click rate'|t('schedulr'), value: funnel.clickRate is null ? null : funnel.clickRate ~ '%' },
+            ],
+        } only %}
     {% endif %}
 
     {% if variants|length > 1 %}
-        <div class="pane">
-            <h2>{{ 'A/B result'|t('schedulr') }}</h2>
-            <table class="data fullwidth">
-                <thead>
+        <h2>{{ 'A/B result'|t('schedulr') }}</h2>
+        <table class="data fullwidth">
+            <thead>
+                <tr>
+                    <th scope="col">{{ 'Variant'|t('schedulr') }}</th>
+                    <th scope="col">{{ 'Share'|t('schedulr') }}</th>
+                    <th scope="col">{{ 'Delivered'|t('schedulr') }}</th>
+                    <th scope="col">{{ 'Clicked'|t('schedulr') }}</th>
+                    <th scope="col">{{ 'Click rate'|t('schedulr') }}</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for variant in variants %}
                     <tr>
-                        <th>{{ 'Variant'|t('schedulr') }}</th>
-                        <th>{{ 'Share'|t('schedulr') }}</th>
-                        <th>{{ 'Delivered'|t('schedulr') }}</th>
-                        <th>{{ 'Clicked'|t('schedulr') }}</th>
-                        <th>{{ 'Click rate'|t('schedulr') }}</th>
+                        <th scope="row">
+                            {{ variant.isWinner
+                                ? 'Variant {label} (winner)'|t('schedulr', { label: variant.label })
+                                : 'Variant {label}'|t('schedulr', { label: variant.label }) }}
+                        </th>
+                        <td>{{ variant.share }}%</td>
+                        <td>{{ variant.delivered|number_format }}</td>
+                        <td>{{ variant.clicked|number_format }}</td>
+                        <td>{{ variant.getClickRate() is null ? ui.muted('Not enough data'|t('schedulr')) : variant.getClickRate() ~ '%' }}</td>
                     </tr>
-                </thead>
-                <tbody>
-                    {% for variant in variants %}
-                        <tr>
-                            <td>
-                                {{ variant.label }}
-                                {% if variant.isWinner %}<strong> · {{ 'winner'|t('schedulr') }}</strong>{% endif %}
-                            </td>
-                            <td>{{ variant.share }}%</td>
-                            <td>{{ variant.delivered|number_format }}</td>
-                            <td>{{ variant.clicked|number_format }}</td>
-                            <td>{{ variant.getClickRate() is null ? '—' : variant.getClickRate() ~ '%' }}</td>
-                        </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-            <p class="light smalltext">
-                {{ 'A winner is only declared once both arms have at least 100 deliveries.'|t('schedulr') }}
-            </p>
-        </div>
+                {% endfor %}
+            </tbody>
+        </table>
+        <p class="light smalltext">
+            {{ 'A winner is only declared once both arms have at least 100 deliveries.'|t('schedulr') }}
+        </p>
     {% endif %}
 
     {% if summary|length %}
-        <div class="pane">
-            <h2>{{ 'By channel'|t('schedulr') }}</h2>
-            <table class="data fullwidth">
-                <tbody>
-                    {% for channel, statuses in summary %}
-                        <tr>
-                            <th style="width: 140px;">{{ channel }}</th>
-                            <td>
+        <h2>{{ 'By channel'|t('schedulr') }}</h2>
+        <table class="data fullwidth">
+            <thead>
+                <tr>
+                    <th scope="col">{{ 'Channel'|t('schedulr') }}</th>
+                    <th scope="col">{{ 'Outcomes'|t('schedulr') }}</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for channel, statuses in summary %}
+                    <tr>
+                        <th scope="row">{{ ui.channelLabel(channel) }}</th>
+                        <td>
+                            <ul class="flex flex-wrap schedulr-inline-list">
                                 {% for status, count in statuses %}
-                                    <span class="light">{{ status }}</span> {{ count|number_format }}{{ not loop.last ? ' · ' : '' }}
+                                    <li>{{ ui.deliveryStatus(status) }} {{ count|number_format }}</li>
                                 {% endfor %}
-                            </td>
-                        </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
+                            </ul>
+                        </td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
     {% endif %}
 
     {% if failures|length %}
-        <div class="pane">
-            <h2>{{ 'Why things failed'|t('schedulr') }}</h2>
-            {# Grouped by status code, not by message: a push service's body text varies per request
-               while its code does not, so grouping on the message gives four hundred groups of one. #}
-            <table class="data fullwidth">
-                <thead>
+        <h2>{{ 'Why things failed'|t('schedulr') }}</h2>
+        {# Grouped by status code, not by message: a push service's body text varies per request
+           while its code does not, so grouping on the message gives four hundred groups of one. #}
+        <table class="data fullwidth">
+            <thead>
+                <tr>
+                    <th scope="col">{{ 'Channel'|t('schedulr') }}</th>
+                    <th scope="col">{{ 'Outcome'|t('schedulr') }}</th>
+                    <th scope="col">{{ 'Code'|t('schedulr') }}</th>
+                    <th scope="col">{{ 'Count'|t('schedulr') }}</th>
+                    <th scope="col">{{ 'Example'|t('schedulr') }}</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in failures %}
                     <tr>
-                        <th>{{ 'Channel'|t('schedulr') }}</th>
-                        <th>{{ 'Outcome'|t('schedulr') }}</th>
-                        <th>{{ 'Code'|t('schedulr') }}</th>
-                        <th>{{ 'Count'|t('schedulr') }}</th>
-                        <th>{{ 'Example'|t('schedulr') }}</th>
+                        <td>{{ ui.channelLabel(row.channel) }}</td>
+                        <td>{{ ui.deliveryStatus(row.status) }}</td>
+                        <td>{{ row.statusCode ?? ui.muted('None'|t('schedulr')) }}</td>
+                        <td>{{ row.total|number_format }}</td>
+                        <td class="light smalltext">{{ row.example ? row.example|slice(0, 140) : '' }}</td>
                     </tr>
-                </thead>
-                <tbody>
-                    {% for row in failures %}
-                        <tr>
-                            <td>{{ row.channel }}</td>
-                            <td>{{ row.status }}</td>
-                            <td>{{ row.statusCode ?? '—' }}</td>
-                            <td>{{ row.total|number_format }}</td>
-                            <td class="light smalltext">{{ row.example ? row.example|slice(0, 140) : '' }}</td>
-                        </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
+                {% endfor %}
+            </tbody>
+        </table>
     {% endif %}
 
-    <div class="pane">
-        <div class="flex" style="justify-content: space-between; align-items: center;">
-            <h2 style="margin: 0;">{{ 'Delivery log'|t('schedulr') }}</h2>
-            <a class="btn{{ failedOnly ? ' active' : '' }}"
-               href="{{ url('schedulr/notifications/' ~ notification.id ~ '/deliveries', failedOnly ? {} : { failed: 1 }) }}">
-                {{ failedOnly ? 'Show all'|t('schedulr') : 'Failures only'|t('schedulr') }}
-            </a>
-        </div>
-
-        {% if rows|length %}
-            <table class="data fullwidth" style="margin-top: 12px;">
-                <thead>
-                    <tr>
-                        <th>{{ 'When'|t('schedulr') }}</th>
-                        <th>{{ 'Recipient'|t('schedulr') }}</th>
-                        <th>{{ 'Channel'|t('schedulr') }}</th>
-                        <th>{{ 'Status'|t('schedulr') }}</th>
-                        <th>{{ 'Detail'|t('schedulr') }}</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for row in rows %}
-                        {% set subscriber = row.subscriberId ? subscribers[row.subscriberId] ?? null : null %}
-                        <tr>
-                            <td class="light">{{ row.dateCreated|datetime('short') }}</td>
-                            <td>
-                                {% if subscriber %}
-                                    <a href="{{ url('schedulr/subscribers/' ~ subscriber.id) }}">
-                                        {{ subscriber.getEmailAddress() ?? subscriber.visitorId|slice(0, 8) }}
-                                    </a>
-                                {% else %}
-                                    {# Not an orphan to tidy away — the ledger outliving its subjects is
-                                       the point of `ON DELETE SET NULL`. #}
-                                    <span class="light">{{ 'forgotten'|t('schedulr') }}</span>
-                                {% endif %}
-                            </td>
-                            <td>{{ row.channel }}</td>
-                            <td>{{ row.status }}{% if row.statusCode %} <span class="light">{{ row.statusCode }}</span>{% endif %}</td>
-                            <td class="light smalltext">{{ row.error ? row.error|slice(0, 140) : '' }}</td>
-                        </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-
-            {% if pageCount > 1 %}
-                <div class="flex" style="margin-top: 16px; align-items: center;">
-                    {% if page > 1 %}
-                        <a class="btn" href="{{ url('schedulr/notifications/' ~ notification.id ~ '/deliveries', { page: page - 1, failed: failedOnly ? 1 : null }) }}">{{ 'Previous'|t('app') }}</a>
-                    {% endif %}
-                    <span class="light">{{ 'Page {page} of {total}'|t('schedulr', { page: page, total: pageCount }) }}</span>
-                    {% if page < pageCount %}
-                        <a class="btn" href="{{ url('schedulr/notifications/' ~ notification.id ~ '/deliveries', { page: page + 1, failed: failedOnly ? 1 : null }) }}">{{ 'Next'|t('app') }}</a>
-                    {% endif %}
-                </div>
-            {% endif %}
-        {% else %}
-            <p class="light">{{ 'Nothing recorded yet.'|t('schedulr') }}</p>
-        {% endif %}
+    <div class="flex schedulr-section-head">
+        <h2>{{ 'Delivery log'|t('schedulr') }}</h2>
+        <div class="flex-grow"></div>
+        <nav class="btngroup" aria-label="{{ 'Show'|t('schedulr') }}">
+            <a class="btn small{{ not failedOnly ? ' active' : '' }}"
+               href="{{ url('schedulr/notifications/' ~ notification.id ~ '/deliveries') }}"
+               {% if not failedOnly %}aria-current="page"{% endif %}>{{ 'All'|t('schedulr') }}</a>
+            <a class="btn small{{ failedOnly ? ' active' : '' }}"
+               href="{{ url('schedulr/notifications/' ~ notification.id ~ '/deliveries', { failed: 1 }) }}"
+               {% if failedOnly %}aria-current="page"{% endif %}>{{ 'Failures only'|t('schedulr') }}</a>
+        </nav>
     </div>
 
-    {% if occurrences|length %}
-        <div class="pane">
-            <h2>{{ 'Sends'|t('schedulr') }}</h2>
-            <table class="data fullwidth">
-                <thead>
+    {% if rows|length %}
+        <table class="data fullwidth">
+            <thead>
+                <tr>
+                    <th scope="col">{{ 'When'|t('schedulr') }}</th>
+                    <th scope="col">{{ 'Recipient'|t('schedulr') }}</th>
+                    <th scope="col">{{ 'Channel'|t('schedulr') }}</th>
+                    <th scope="col">{{ 'Status'|t('schedulr') }}</th>
+                    <th scope="col">{{ 'Detail'|t('schedulr') }}</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in rows %}
+                    {% set subscriber = row.subscriberId ? subscribers[row.subscriberId] ?? null : null %}
                     <tr>
-                        <th>{{ 'Due'|t('schedulr') }}</th>
-                        <th>{{ 'Time zone'|t('schedulr') }}</th>
-                        <th>{{ 'Status'|t('schedulr') }}</th>
-                        <th>{{ 'Targeted'|t('schedulr') }}</th>
-                        <th>{{ 'Delivered'|t('schedulr') }}</th>
+                        <td class="light">{{ row.dateCreated|datetime('short') }}</td>
+                        <td>
+                            {% if subscriber %}
+                                <a href="{{ url('schedulr/subscribers/' ~ subscriber.id) }}">
+                                    {{ subscriber.getEmailAddress() ?? subscriber.visitorId|slice(0, 8) }}
+                                </a>
+                            {% else %}
+                                {# Not an orphan to tidy away: the ledger outliving its subjects is
+                                   the point of `ON DELETE SET NULL`. #}
+                                {{ ui.muted('Forgotten'|t('schedulr')) }}
+                            {% endif %}
+                        </td>
+                        <td>{{ ui.channelLabel(row.channel) }}</td>
+                        <td>{{ ui.deliveryStatus(row.status, row.statusCode) }}</td>
+                        <td class="light smalltext">{{ row.error ? row.error|slice(0, 140) : '' }}</td>
                     </tr>
-                </thead>
-                <tbody>
-                    {% for occurrence in occurrences %}
-                        <tr>
-                            <td>{{ occurrence.dueAt|datetime('short') }}</td>
-                            <td class="light">{{ occurrence.timezone ?? '' }}</td>
-                            <td>{{ occurrence.getStatusLabel() }}</td>
-                            <td>{{ occurrence.targeted }}</td>
-                            <td>{{ occurrence.delivered }}</td>
-                        </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
+                {% endfor %}
+            </tbody>
+        </table>
+
+        {% if pageCount > 1 %}
+            <nav class="flex schedulr-pager" aria-label="{{ 'Pagination'|t('app') }}">
+                {% if page > 1 %}
+                    <a class="btn" rel="prev" href="{{ url('schedulr/notifications/' ~ notification.id ~ '/deliveries', { page: page - 1, failed: failedOnly ? 1 : null }) }}">{{ 'Previous'|t('app') }}</a>
+                {% endif %}
+                <span class="light">{{ 'Page {page} of {total}'|t('schedulr', { page: page, total: pageCount }) }}</span>
+                {% if page < pageCount %}
+                    <a class="btn" rel="next" href="{{ url('schedulr/notifications/' ~ notification.id ~ '/deliveries', { page: page + 1, failed: failedOnly ? 1 : null }) }}">{{ 'Next'|t('app') }}</a>
+                {% endif %}
+            </nav>
+        {% endif %}
+    {% else %}
+        <p class="zilch small">{{ failedOnly ? 'No failures recorded.'|t('schedulr') : 'Nothing recorded yet.'|t('schedulr') }}</p>
     {% endif %}
+
+    {% if occurrences|length %}
+        <h2>{{ 'Sends'|t('schedulr') }}</h2>
+        <table class="data fullwidth">
+            <thead>
+                <tr>
+                    <th scope="col">{{ 'Due'|t('schedulr') }}</th>
+                    <th scope="col">{{ 'Time zone'|t('schedulr') }}</th>
+                    <th scope="col">{{ 'Status'|t('schedulr') }}</th>
+                    <th scope="col">{{ 'Targeted'|t('schedulr') }}</th>
+                    <th scope="col">{{ 'Delivered'|t('schedulr') }}</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for occurrence in occurrences %}
+                    <tr>
+                        <td>{{ occurrence.dueAt|datetime('short') }}</td>
+                        <td class="light">{{ occurrence.timezone ?? 'Site time'|t('schedulr') }}</td>
+                        <td>{{ occurrence.getStatusLabel() }}</td>
+                        <td>{{ occurrence.targeted|number_format }}</td>
+                        <td>{{ occurrence.delivered|number_format }}</td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    {% endif %}
+
+    {% css %}
+        .schedulr-section-head { align-items: center; margin-block: var(--xl) var(--m); }
+        .schedulr-section-head h2 { margin: 0; }
+        .schedulr-inline-list { list-style: none; padding: 0; margin: 0; gap: var(--xs) var(--l); }
+        .schedulr-pager { margin-block-start: var(--m); align-items: center; }
+    {% endcss %}
 {% endblock %}

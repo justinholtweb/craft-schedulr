@@ -1,5 +1,6 @@
 {% extends 'schedulr/_layouts/cp' %}
 {% import '_includes/forms' as forms %}
+{% import 'schedulr/_components/_macros' as ui %}
 
 {% set selectedSubnavItem = 'subscribers' %}
 
@@ -10,100 +11,111 @@
 {% endblock %}
 
 {% block content %}
-    <div class="flex" style="gap: 32px; margin-bottom: 24px;">
-        {#
-          Five numbers, and the split between them is the plugin's whole model of a subscriber:
-          somebody who declined push is still on the list and still reachable on-site, which is why
-          "total" is meaningfully larger than "push".
-        #}
-        {% for key, label in {
-            total: 'Known browsers'|t('schedulr'),
-            pushable: 'Push'|t('schedulr'),
-            emailable: 'Email'|t('schedulr'),
-            declined: 'Declined push'|t('schedulr'),
-            unsubscribed: 'Unsubscribed'|t('schedulr'),
-        } %}
-            <div>
-                <div class="light smalltext">{{ label }}</div>
-                <div style="font-size: 20px;">{{ stats[key]|number_format }}</div>
-            </div>
-        {% endfor %}
-    </div>
+    {#
+      Five numbers, and the split between them is the plugin's whole model of a subscriber: somebody
+      who declined push is still on the list and still reachable on-site, which is why "total" is
+      meaningfully larger than "push".
+    #}
+    {% include 'schedulr/_components/_stats' with {
+        stats: [
+            { label: 'Known browsers'|t('schedulr'), value: stats.total|number_format },
+            { label: 'Push'|t('schedulr'), value: stats.pushable|number_format },
+            { label: 'Email'|t('schedulr'), value: stats.emailable|number_format },
+            { label: 'Declined push'|t('schedulr'), value: stats.declined|number_format },
+            { label: 'Unsubscribed'|t('schedulr'), value: stats.unsubscribed|number_format },
+        ],
+    } only %}
 
     {% if timezones|length > 1 %}
         <p class="light">
-            {{ '{count} time zones on this list — a “09:00 local” send becomes {count} separate deliveries, spread over about 26 hours.'|t('schedulr', { count: timezones|length }) }}
+            {{ '{count} time zones on this list. A “09:00 local” send becomes {count} separate deliveries, spread over about 26 hours.'|t('schedulr', { count: timezones|length }) }}
         </p>
     {% endif %}
 
-    <form method="get" action="{{ url('schedulr/subscribers') }}" class="flex" style="margin-bottom: 16px;">
-        <div>
-            {{ forms.text({ name: 'search', value: search, placeholder: 'Search'|t('app'), class: 'text' }) }}
-        </div>
-        <div>
-            {{ forms.select({
-                name: 'filter',
-                value: filter,
-                options: [
-                    { label: 'Everyone'|t('schedulr'), value: '' },
-                    { label: 'Push subscribers'|t('schedulr'), value: 'pushable' },
-                    { label: 'Has an email address'|t('schedulr'), value: 'emailable' },
-                    { label: 'Unsubscribed'|t('schedulr'), value: 'unsubscribed' },
-                ],
+    {# A GET form outside the page form (this screen has none), so the filter is a bookmarkable URL. #}
+    <form method="get" action="{{ url('schedulr/subscribers') }}" class="toolbar" role="search"
+          aria-label="{{ 'Filter subscribers'|t('schedulr') }}">
+        <div class="search-container flex-grow">
+            <label for="subscriber-search" class="visually-hidden">{{ 'Search'|t('app') }}</label>
+            {{ forms.text({
+                id: 'subscriber-search',
+                name: 'search',
+                value: search,
+                placeholder: 'Search by email or visitor ID'|t('schedulr'),
+                type: 'search',
+                class: 'fullwidth',
             }) }}
         </div>
-        <div><button type="submit" class="btn">{{ 'Filter'|t('schedulr') }}</button></div>
+        <label for="subscriber-filter" class="visually-hidden">{{ 'Show'|t('schedulr') }}</label>
+        {{ forms.select({
+            id: 'subscriber-filter',
+            name: 'filter',
+            value: filter,
+            options: [
+                { label: 'Everyone'|t('schedulr'), value: '' },
+                { label: 'Push subscribers'|t('schedulr'), value: 'pushable' },
+                { label: 'Has an email address'|t('schedulr'), value: 'emailable' },
+                { label: 'Unsubscribed'|t('schedulr'), value: 'unsubscribed' },
+            ],
+        }) }}
+        <button type="submit" class="btn">{{ 'Filter'|t('schedulr') }}</button>
     </form>
 
     {% if subscribers|length %}
         <table class="data fullwidth">
             <thead>
                 <tr>
-                    <th>{{ 'State'|t('schedulr') }}</th>
-                    <th>{{ 'Identity'|t('schedulr') }}</th>
-                    <th>{{ 'Platform'|t('schedulr') }}</th>
-                    <th>{{ 'Time zone'|t('schedulr') }}</th>
-                    <th>{{ 'Visits'|t('schedulr') }}</th>
-                    <th>{{ 'Notified'|t('schedulr') }}</th>
-                    <th>{{ 'Last seen'|t('schedulr') }}</th>
+                    <th scope="col">{{ 'State'|t('schedulr') }}</th>
+                    <th scope="col">{{ 'Identity'|t('schedulr') }}</th>
+                    <th scope="col">{{ 'Platform'|t('schedulr') }}</th>
+                    <th scope="col">{{ 'Time zone'|t('schedulr') }}</th>
+                    <th scope="col">{{ 'Visits'|t('schedulr') }}</th>
+                    <th scope="col">{{ 'Notified'|t('schedulr') }}</th>
+                    <th scope="col">{{ 'Last seen'|t('schedulr') }}</th>
                 </tr>
             </thead>
             <tbody>
                 {% for subscriber in subscribers %}
                     <tr>
-                        <td>{{ subscriber.getStateLabel() }}</td>
+                        <td>{{ ui.subscriberState(subscriber) }}</td>
                         <td>
                             <a href="{{ url('schedulr/subscribers/' ~ subscriber.id) }}">
                                 {{ subscriber.getEmailAddress() ?? subscriber.visitorId|slice(0, 8) }}
                             </a>
                             {% if subscriber.userId %}
-                                <span class="light">· {{ 'signed in'|t('schedulr') }}</span>
+                                <span class="light">{{ '(signed in)'|t('schedulr') }}</span>
                             {% endif %}
                         </td>
-                        <td class="light">{{ subscriber.platform ?? '' }}</td>
-                        <td class="light">{{ subscriber.timezone ?? '' }}</td>
-                        <td>{{ subscriber.visits }}</td>
-                        <td>{{ subscriber.notifiedCount }}</td>
-                        <td class="light">{{ subscriber.dateLastSeen ? subscriber.dateLastSeen|datetime('short') : '' }}</td>
+                        <td>{{ subscriber.platform ?? ui.muted('Unknown'|t('schedulr')) }}</td>
+                        <td>{{ subscriber.timezone ?? ui.muted('Unknown'|t('schedulr')) }}</td>
+                        <td>{{ subscriber.visits|number_format }}</td>
+                        <td>{{ subscriber.notifiedCount|number_format }}</td>
+                        <td>{{ subscriber.dateLastSeen ? subscriber.dateLastSeen|datetime('short') : ui.muted('Never'|t('schedulr')) }}</td>
                     </tr>
                 {% endfor %}
             </tbody>
         </table>
 
         {% if pageCount > 1 %}
-            <div class="flex" style="margin-top: 16px; align-items: center;">
+            <nav class="flex schedulr-pager" aria-label="{{ 'Pagination'|t('app') }}">
                 {% if page > 1 %}
-                    <a class="btn" href="{{ url('schedulr/subscribers', { page: page - 1, filter: filter, search: search }) }}">{{ 'Previous'|t('app') }}</a>
+                    <a class="btn" rel="prev" href="{{ url('schedulr/subscribers', { page: page - 1, filter: filter, search: search }) }}">{{ 'Previous'|t('app') }}</a>
                 {% endif %}
                 <span class="light">{{ 'Page {page} of {total}'|t('schedulr', { page: page, total: pageCount }) }}</span>
                 {% if page < pageCount %}
-                    <a class="btn" href="{{ url('schedulr/subscribers', { page: page + 1, filter: filter, search: search }) }}">{{ 'Next'|t('app') }}</a>
+                    <a class="btn" rel="next" href="{{ url('schedulr/subscribers', { page: page + 1, filter: filter, search: search }) }}">{{ 'Next'|t('app') }}</a>
                 {% endif %}
-            </div>
+            </nav>
         {% endif %}
+    {% elseif search or filter %}
+        <p class="zilch small">{{ 'Nobody matches that.'|t('schedulr') }}</p>
     {% else %}
-        <p class="light">
-            {{ 'Nobody yet. Visit the front end of the site — Schedulr records a browser on its first page view, before anybody grants any permission.'|t('schedulr') }}
+        <p class="zilch small">
+            {{ 'Nobody yet. Visit the front end of the site: Schedulr records a browser on its first page view, before anybody grants any permission.'|t('schedulr') }}
         </p>
     {% endif %}
+
+    {% css %}
+        .schedulr-pager { margin-block-start: var(--m); align-items: center; }
+    {% endcss %}
 {% endblock %}

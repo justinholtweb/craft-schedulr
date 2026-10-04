@@ -122,6 +122,159 @@ final class RecurrenceTest extends TestCase
         self::assertSame(['2026-06-15', '2027-06-15', '2028-06-15'], $dates);
     }
 
+    public function testWeeklyFromAMidweekAnchorDoesNotSkipAWeek(): void
+    {
+        // Anchored on a Wednesday, every Thursday. Stepping the cursor a week and then jumping to "sunday
+        // this week" — PHP's weeks start on Monday — used to lose the 12th entirely.
+        $dates = Recurrence::dates(
+            Recurrence::WEEKLY,
+            new DateTimeImmutable('2026-03-04', $this->zone()),
+            new DateTimeImmutable('2026-03-20', $this->zone()),
+            $this->zone(),
+            byWeekday: [4],
+        );
+
+        self::assertSame(['2026-03-05', '2026-03-12', '2026-03-19'], $dates);
+    }
+
+    /**
+     * The runner expands every minute. A rule re-anchored at "today" on every pass makes each pass's
+     * first week *this* week, so "every other Tuesday" fired every Tuesday.
+     */
+    public function testWeeklyIntervalIsAnchoredAtTheStartDateNotToday(): void
+    {
+        $anchor = new DateTimeImmutable('2026-09-01', $this->zone()); // a Tuesday
+        $horizon = new DateTimeImmutable('2026-11-15', $this->zone());
+
+        $expected = ['2026-10-13', '2026-10-27', '2026-11-10'];
+
+        // Expanded on four consecutive days — including both weeks of the cycle — and every pass
+        // agrees on which Tuesdays are in it.
+        foreach (['2026-10-03', '2026-10-04', '2026-10-06', '2026-10-10'] as $today) {
+            $dates = Recurrence::dates(
+                Recurrence::WEEKLY,
+                $anchor,
+                $horizon,
+                $this->zone(),
+                interval: 2,
+                byWeekday: [2],
+                notBefore: new DateTimeImmutable($today, $this->zone()),
+            );
+
+            self::assertSame($expected, $dates, "expanded on $today");
+        }
+    }
+
+    public function testYearlyYieldsOneDatePerYearWhicheverDayItIsExpanded(): void
+    {
+        $anchor = new DateTimeImmutable('2024-06-15', $this->zone());
+
+        // Expanded daily with a ninety-day horizon, a yearly rule must produce nothing at all until its
+        // day is inside the window — not today's date, once per pass.
+        foreach (['2026-10-03', '2026-10-04', '2026-10-05'] as $today) {
+            $now = new DateTimeImmutable($today, $this->zone());
+
+            self::assertSame([], Recurrence::dates(
+                Recurrence::YEARLY,
+                $anchor,
+                $now->modify('+90 days'),
+                $this->zone(),
+                notBefore: $now,
+            ), "expanded on $today");
+        }
+
+        self::assertSame(['2027-06-15', '2028-06-15', '2029-06-15'], Recurrence::dates(
+            Recurrence::YEARLY,
+            $anchor,
+            new DateTimeImmutable('2029-12-31', $this->zone()),
+            $this->zone(),
+            notBefore: new DateTimeImmutable('2026-10-03', $this->zone()),
+        ));
+    }
+
+    public function testYearlyClampsTheTwentyNinthOfFebruary(): void
+    {
+        self::assertSame(['2028-02-29', '2029-02-28', '2030-02-28', '2031-02-28', '2032-02-29'], Recurrence::dates(
+            Recurrence::YEARLY,
+            new DateTimeImmutable('2028-02-29', $this->zone()),
+            new DateTimeImmutable('2032-12-31', $this->zone()),
+            $this->zone(),
+        ));
+    }
+
+    public function testMonthlyIntervalIsAnchoredAtTheStartDate(): void
+    {
+        // Every third month on the 10th, from January: Jan, Apr, Jul, Oct. Expanded in August, the next
+        // one is October — not August, which is where re-anchoring at today would put it.
+        $dates = Recurrence::dates(
+            Recurrence::MONTHLY,
+            new DateTimeImmutable('2026-01-10', $this->zone()),
+            new DateTimeImmutable('2027-01-31', $this->zone()),
+            $this->zone(),
+            interval: 3,
+            byMonthDay: [10],
+            notBefore: new DateTimeImmutable('2026-08-01', $this->zone()),
+        );
+
+        self::assertSame(['2026-10-10', '2027-01-10'], $dates);
+    }
+
+    public function testMaxOccurrencesIsHonouredAcrossRepeatedExpansions(): void
+    {
+        $anchor = new DateTimeImmutable('2026-10-01', $this->zone());
+        $horizon = new DateTimeImmutable('2027-01-01', $this->zone());
+
+        $expand = fn(string $today) => Recurrence::dates(
+            Recurrence::DAILY,
+            $anchor,
+            $horizon,
+            $this->zone(),
+            limit: 3,
+            notBefore: new DateTimeImmutable($today, $this->zone()),
+        );
+
+        // The first pass sees all three. Each later pass sees only what is left of them, and once the
+        // three have gone the rule is finished — a count restarting at zero each pass would hand out
+        // three more every day, forever.
+        self::assertSame(['2026-10-01', '2026-10-02', '2026-10-03'], $expand('2026-10-01'));
+        self::assertSame(['2026-10-02', '2026-10-03'], $expand('2026-10-02'));
+        self::assertSame(['2026-10-03'], $expand('2026-10-03'));
+        self::assertSame([], $expand('2026-10-04'));
+        self::assertSame([], $expand('2026-12-25'));
+    }
+
+    public function testMaxOccurrencesCountsEveryWeekdayOfAWeeklyRule(): void
+    {
+        // Mondays and Fridays, stop after five: two weeks and a Monday.
+        $dates = Recurrence::dates(
+            Recurrence::WEEKLY,
+            new DateTimeImmutable('2026-03-01', $this->zone()),
+            new DateTimeImmutable('2026-06-01', $this->zone()),
+            $this->zone(),
+            byWeekday: [5, 1],
+            limit: 5,
+            notBefore: new DateTimeImmutable('2026-03-10', $this->zone()),
+        );
+
+        self::assertSame(['2026-03-13', '2026-03-16'], $dates);
+    }
+
+    public function testAnAncientAnchorStillExpandsCheaplyAndInPhase(): void
+    {
+        // Ten years of every-other-day, and today's slice must still be on the anchor's parity.
+        $dates = Recurrence::dates(
+            Recurrence::DAILY,
+            new DateTimeImmutable('2016-01-01', $this->zone()),
+            new DateTimeImmutable('2026-01-10', $this->zone()),
+            $this->zone(),
+            interval: 2,
+            notBefore: new DateTimeImmutable('2026-01-01', $this->zone()),
+        );
+
+        // 2016-01-01 to 2026-01-01 is 3,653 days — odd — so the 1st itself is off-cycle.
+        self::assertSame(['2026-01-02', '2026-01-04', '2026-01-06', '2026-01-08', '2026-01-10'], $dates);
+    }
+
     public function testLimitIsHonoured(): void
     {
         $dates = Recurrence::dates(

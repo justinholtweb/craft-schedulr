@@ -41,8 +41,26 @@ final class Recurrence
     /**
      * The dates a rule lands on, as `Y-m-d` strings in `$zone`.
      *
+     * `$from` is the rule's **anchor**, not "where to start looking". Everything that gives a rule its
+     * shape is measured from it: which weeks "every other week" means, which years a yearly rule lands
+     * in, and how many times a "stop after 10" rule has already fired. `$notBefore` is where output
+     * starts. Keeping the two apart is the whole fix for a family of bugs that all looked like one
+     * line — `from = max(startDate, today)` — because the runner expands every minute, and a rule
+     * re-anchored at today on every pass:
+     *
+     * - fires "every other week" weekly, because each pass's first week is this week;
+     * - materialises a yearly rule on today's date, every day;
+     * - never stops a `maxOccurrences` rule, because the count starts again at zero each pass.
+     *
+     * So the walk always begins at the anchor and *counts* every date it lands on toward `$limit`,
+     * including the ones before `$notBefore` that it does not return. Whole periods before
+     * `$notBefore` are skipped arithmetically when there is no limit to count against, so a daily rule
+     * anchored five years ago costs the same to expand as one anchored yesterday.
+     *
      * @param int[] $byWeekday 0-6, Sunday first. Only read for a weekly rule.
      * @param int[] $byMonthDay 1-31, plus -1 for the last day. Only read for a monthly rule.
+     * @param int|null $limit The rule's total number of occurrences, counted from the anchor.
+     * @param DateTimeImmutable|null $notBefore Dates before this one (in `$zone`) are counted, not returned.
      * @return string[]
      */
     public static function dates(
@@ -54,87 +72,208 @@ final class Recurrence
         array $byWeekday = [],
         array $byMonthDay = [],
         ?int $limit = null,
+        ?DateTimeImmutable $notBefore = null,
     ): array {
         $interval = max(1, $interval);
-        $limit ??= self::CEILING;
-        $limit = min($limit, self::CEILING);
 
-        // Midnight in the target zone, so a rule starting "today" is not skipped because the clock has
-        // already passed the time of day the caller will apply later.
-        $cursor = new DateTimeImmutable($from->setTimezone($zone)->format('Y-m-d'), $zone);
-        $end = new DateTimeImmutable($horizon->setTimezone($zone)->format('Y-m-d'), $zone);
-
-        $dates = [];
-
-        // A guard rather than a `while (true)`: a malformed rule — a zero interval that slipped past
-        // validation, a weekday list that never advances — must terminate, and terminating short is
-        // vastly better than a request that never returns.
-        $guard = 0;
-
-        while ($cursor <= $end && count($dates) < $limit && $guard++ < 5000) {
-            switch ($frequency) {
-                case self::DAILY:
-                    $dates[] = $cursor->format('Y-m-d');
-                    $cursor = $cursor->modify('+' . $interval . ' days');
-                    break;
-
-                case self::WEEKLY:
-                    if ($byWeekday === []) {
-                        return [];
-                    }
-
-                    // Every chosen weekday within this week, then jump a whole interval of weeks.
-                    // Stepping day by day and testing membership instead would make `interval` mean
-                    // nothing at all — "every other Tuesday" would fire every Tuesday.
-                    foreach ($byWeekday as $weekday) {
-                        $offset = ($weekday - (int)$cursor->format('w') + 7) % 7;
-                        $day = $cursor->modify('+' . $offset . ' days');
-
-                        if ($day <= $end && count($dates) < $limit) {
-                            $dates[] = $day->format('Y-m-d');
-                        }
-                    }
-
-                    $cursor = $cursor->modify('+' . $interval . ' weeks')->modify('sunday this week');
-                    break;
-
-                case self::MONTHLY:
-                    if ($byMonthDay === []) {
-                        return [];
-                    }
-
-                    foreach ($byMonthDay as $monthDay) {
-                        $day = $monthDay === self::LAST_DAY
-                            ? $cursor->modify('last day of this month')
-                            : $cursor->setDate(
-                                (int)$cursor->format('Y'),
-                                (int)$cursor->format('n'),
-                                // Clamped, not rolled over.
-                                min($monthDay, (int)$cursor->format('t')),
-                            );
-
-                        if ($day >= $cursor && $day <= $end && count($dates) < $limit) {
-                            $dates[] = $day->format('Y-m-d');
-                        }
-                    }
-
-                    $cursor = $cursor->modify('first day of this month')->modify('+' . $interval . ' months');
-                    break;
-
-                case self::YEARLY:
-                    $dates[] = $cursor->format('Y-m-d');
-                    $cursor = $cursor->modify('+' . $interval . ' years');
-                    break;
-
-                default:
-                    return [];
-            }
+        if (!in_array($frequency, [self::DAILY, self::WEEKLY, self::MONTHLY, self::YEARLY], true)) {
+            return [];
         }
 
-        $dates = array_values(array_unique($dates));
-        sort($dates);
+        // Better than falling back to "every day", which is how a half-configured rule becomes a
+        // notification storm.
+        if (($frequency === self::WEEKLY && $byWeekday === []) || ($frequency === self::MONTHLY && $byMonthDay === [])) {
+            return [];
+        }
 
-        return array_slice($dates, 0, $limit);
+        // Every date below is a calendar date, held as midnight **UTC** whatever `$zone` is. The zone is
+        // only used to decide which calendar date an instant falls on; after that the arithmetic is on
+        // dates, where a day is always a day. Doing it on zone-local midnights instead lets a DST change
+        // shave an hour off a "day" and turn `diff()->days` into an off-by-one.
+        $anchor = self::day($from, $zone);
+        $end = self::day($horizon, $zone);
+        $floor = $notBefore !== null ? self::day($notBefore, $zone) : $anchor;
+
+        if ($floor < $anchor) {
+            $floor = $anchor;
+        }
+
+        $index = $limit === null ? self::firstPeriod($frequency, $anchor, $floor, $interval) : 0;
+
+        $dates = [];
+        $counted = 0;
+
+        // A guard rather than a `while (true)`: a malformed rule must terminate, and terminating short
+        // is vastly better than a request that never returns. Generous, because a counted rule walks
+        // every period from its anchor.
+        $guard = 0;
+
+        while ($guard++ < 100000) {
+            $candidates = self::period($frequency, $anchor, $index, $interval, $byWeekday, $byMonthDay);
+
+            if ($candidates === null) {
+                break;
+            }
+
+            [$periodStart, $days] = $candidates;
+
+            if ($periodStart > $end) {
+                break;
+            }
+
+            foreach ($days as $day) {
+                if ($day < $anchor || $day > $end) {
+                    continue;
+                }
+
+                if ($limit !== null && $counted >= $limit) {
+                    break 2;
+                }
+
+                $counted++;
+
+                if ($day >= $floor) {
+                    $dates[] = $day->format('Y-m-d');
+
+                    if (count($dates) >= self::CEILING) {
+                        break 2;
+                    }
+                }
+            }
+
+            $index++;
+        }
+
+        return $dates;
+    }
+
+    /**
+     * A calendar date in `$zone`, as midnight UTC.
+     */
+    private static function day(DateTimeImmutable $value, DateTimeZone $zone): DateTimeImmutable
+    {
+        return new DateTimeImmutable($value->setTimezone($zone)->format('Y-m-d'), new DateTimeZone('UTC'));
+    }
+
+    /**
+     * The period the floor falls in, so the walk can start there.
+     *
+     * Only used when nothing is being counted. Counting what a skipped weekly or monthly period
+     * *would* have produced means re-deriving the clamping and the first-period cut-off, and the walk
+     * already does both correctly — and a counted rule is bounded by its own limit anyway. Rounds
+     * down, so it can only ever land on or before the floor's period, never past it.
+     */
+    private static function firstPeriod(
+        string $frequency,
+        DateTimeImmutable $anchor,
+        DateTimeImmutable $floor,
+        int $interval,
+    ): int {
+        if ($floor <= $anchor) {
+            return 0;
+        }
+
+        $elapsed = match ($frequency) {
+            self::DAILY => (int)$anchor->diff($floor)->days,
+            self::WEEKLY => intdiv((int)self::weekStart($anchor)->diff(self::weekStart($floor))->days, 7),
+            self::MONTHLY => (((int)$floor->format('Y') - (int)$anchor->format('Y')) * 12)
+                + ((int)$floor->format('n') - (int)$anchor->format('n')),
+            default => (int)$floor->format('Y') - (int)$anchor->format('Y'),
+        };
+
+        return intdiv(max(0, $elapsed), $interval);
+    }
+
+    /**
+     * The `$index`th period of a rule: when it starts, and the dates in it, sorted and unique.
+     *
+     * @param int[] $byWeekday
+     * @param int[] $byMonthDay
+     * @return array{0: DateTimeImmutable, 1: DateTimeImmutable[]}|null
+     */
+    private static function period(
+        string $frequency,
+        DateTimeImmutable $anchor,
+        int $index,
+        int $interval,
+        array $byWeekday,
+        array $byMonthDay,
+    ): ?array {
+        $step = $index * $interval;
+
+        switch ($frequency) {
+            case self::DAILY:
+                $day = $anchor->modify('+' . $step . ' days');
+
+                return [$day, [$day]];
+
+            case self::WEEKLY:
+                // Weeks run Sunday to Saturday and the phase comes from the anchor's week, so "every
+                // other Tuesday" is every other Tuesday counted from the week the rule started — not
+                // from whichever week the runner happened to look in.
+                $start = self::weekStart($anchor)->modify('+' . ($step * 7) . ' days');
+                $days = [];
+
+                foreach ($byWeekday as $weekday) {
+                    $weekday = (int)$weekday;
+
+                    if ($weekday < 0 || $weekday > 6) {
+                        continue;
+                    }
+
+                    $days[$weekday] = $start->modify('+' . $weekday . ' days');
+                }
+
+                ksort($days);
+
+                return [$start, array_values($days)];
+
+            case self::MONTHLY:
+                $start = self::ymd((int)$anchor->format('Y'), (int)$anchor->format('n') + $step, 1);
+                $last = (int)$start->format('t');
+                $days = [];
+
+                foreach ($byMonthDay as $monthDay) {
+                    $monthDay = (int)$monthDay;
+                    // Clamped, not rolled over: "the 31st" in February is the 28th.
+                    $dayOfMonth = $monthDay === self::LAST_DAY ? $last : min(max(1, $monthDay), $last);
+                    $days[$dayOfMonth] = $start->setDate((int)$start->format('Y'), (int)$start->format('n'), $dayOfMonth);
+                }
+
+                ksort($days);
+
+                return [$start, array_values($days)];
+
+            case self::YEARLY:
+                // The anchor's month and day, every `$interval` years. Clamped like a monthly rule, so
+                // a rule anchored on the 29th of February lands on the 28th in the three years out of
+                // four that have no 29th — `+1 year` would land it on the 1st of March.
+                $start = self::ymd((int)$anchor->format('Y') + $step, (int)$anchor->format('n'), 1);
+                $day = $start->setDate(
+                    (int)$start->format('Y'),
+                    (int)$start->format('n'),
+                    min((int)$anchor->format('j'), (int)$start->format('t')),
+                );
+
+                return [$day, [$day]];
+        }
+
+        return null;
+    }
+
+    /** The Sunday on or before a date. */
+    private static function weekStart(DateTimeImmutable $day): DateTimeImmutable
+    {
+        return $day->modify('-' . (int)$day->format('w') . ' days');
+    }
+
+    /** A date from parts, with the month allowed to overflow into later years. */
+    private static function ymd(int $year, int $month, int $day): DateTimeImmutable
+    {
+        $year += intdiv($month - 1, 12);
+        $month = (($month - 1) % 12) + 1;
+
+        return new DateTimeImmutable(sprintf('%04d-%02d-%02d', $year, $month, $day), new DateTimeZone('UTC'));
     }
 
     /**

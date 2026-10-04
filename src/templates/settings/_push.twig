@@ -2,171 +2,213 @@
 {% import '_includes/forms' as forms %}
 
 {% block pane %}
+    {% include 'schedulr/_components/_cp-js' %}
+
     {% if interop.installed %}
-        <div class="pane">
-            <h2>{{ 'PWA is installed'|t('schedulr') }}</h2>
-            <p>
-                {#
-                  Said plainly, because the alternative is somebody wondering why Schedulr generated no
-                  keys and registered no worker, and concluding it is broken.
-                #}
-                {{ 'Schedulr is standing aside for it, which is what keeps a site running both plugins working: one keypair, one prompt, one service worker.'|t('schedulr') }}
-            </p>
-            <table class="data fullwidth">
-                <tbody>
-                    <tr>
-                        <th style="width: 240px;">{{ 'Keypair'|t('schedulr') }}</th>
-                        <td>{{ interop.keys ? 'PWA’s'|t('schedulr') : 'Schedulr’s own'|t('schedulr') }}</td>
-                    </tr>
-                    <tr>
-                        <th>{{ 'Service worker'|t('schedulr') }}</th>
-                        <td>
-                            {{ interop.worker ? 'PWA’s'|t('schedulr') : 'Schedulr’s own'|t('schedulr') }}
-                            {% if interop.worker %}
-                                <span class="light">{{ '— PWA’s worker renders Schedulr’s notifications unchanged.'|t('schedulr') }}</span>
-                            {% endif %}
-                        </td>
-                    </tr>
-                    <tr>
-                        <th>{{ 'Subscribers in PWA'|t('schedulr') }}</th>
-                        <td>
-                            {{ interop.subscribers|number_format }}
+        {#
+          Said plainly, because the alternative is somebody wondering why Schedulr generated no keys
+          and registered no worker, and concluding it is broken.
+        #}
+        <h2 class="first">{{ 'PWA is installed'|t('schedulr') }}</h2>
+        <p class="readable">
+            {{ 'Schedulr is standing aside for it, which is what keeps a site running both plugins working: one keypair, one prompt, one service worker.'|t('schedulr') }}
+        </p>
+        <table class="data fullwidth">
+            <tbody>
+                <tr>
+                    <th scope="row">{{ 'Keypair'|t('schedulr') }}</th>
+                    <td>{{ interop.keys ? 'PWA’s'|t('schedulr') : 'Schedulr’s own'|t('schedulr') }}</td>
+                </tr>
+                <tr>
+                    <th scope="row">{{ 'Service worker'|t('schedulr') }}</th>
+                    <td>
+                        {{ interop.worker ? 'PWA’s'|t('schedulr') : 'Schedulr’s own'|t('schedulr') }}
+                        {% if interop.worker %}
+                            <span class="light">{{ 'PWA’s worker renders Schedulr’s notifications unchanged.'|t('schedulr') }}</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                <tr>
+                    <th scope="row">{{ 'Subscribers in PWA'|t('schedulr') }}</th>
+                    <td>
+                        <div class="flex">
+                            <span>{{ interop.subscribers|number_format }}</span>
                             {% if interop.subscribers %}
-                                <button type="button" class="btn" id="adopt-pwa" style="margin-left: 8px;">
-                                    {{ 'Adopt them'|t('schedulr') }}
-                                </button>
-                                <span class="light">{{ '— already done automatically on install; safe to run again.'|t('schedulr') }}</span>
+                                {{ forms.button({
+                                    id: 'adopt-pwa',
+                                    label: 'Adopt them'|t('schedulr'),
+                                    class: 'small',
+                                    spinner: true,
+                                }) }}
+                                <span class="light">{{ 'Already done automatically on install, and safe to run again.'|t('schedulr') }}</span>
                             {% endif %}
-                        </td>
-                    </tr>
-                </tbody>
-            </table>
-        </div>
+                        </div>
+                    </td>
+                </tr>
+            </tbody>
+        </table>
 
         {{ forms.lightswitchField({
             label: 'Keep standing aside for PWA'|t('schedulr'),
             instructions: 'Turning this off makes Schedulr run its own push stack alongside PWA’s. That means two prompts for the visitor and one service worker replacing the other. It is supported; it is not advisable.'|t('schedulr'),
+            id: 'deferToPwa',
             name: 'settings[deferToPwa]',
             on: settings.deferToPwa,
+            errors: settings.getErrors('deferToPwa'),
+            disabled: readOnly,
         }) }}
 
         <hr>
     {% endif %}
 
-    <div class="field">
-        <div class="heading"><label>{{ 'VAPID keypair'|t('schedulr') }}</label></div>
-        <div class="input">
-            <p class="light">
-                {{ {
-                    pwa: 'Borrowed from PWA.'|t('schedulr'),
-                    env: 'Read from SCHEDULR_VAPID_PUBLIC_KEY and SCHEDULR_VAPID_PRIVATE_KEY.'|t('schedulr'),
-                    generated: 'Generated by Schedulr and stored in the database — never in project config.'|t('schedulr'),
-                }[keySource] ?? keySource }}
-            </p>
-            {% if publicKey %}
-                <code style="word-break: break-all; display: block; margin: 8px 0;">{{ publicKey }}</code>
-            {% endif %}
+    {% set keySourceLabel = {
+        pwa: 'Borrowed from PWA.'|t('schedulr'),
+        env: 'Read from {public} and {private}.'|t('schedulr', {
+            public: '`SCHEDULR_VAPID_PUBLIC_KEY`',
+            private: '`SCHEDULR_VAPID_PRIVATE_KEY`',
+        }),
+        generated: 'Generated by Schedulr and stored in the database, never in project config.'|t('schedulr'),
+    }[keySource] ?? keySource %}
 
-            {% if keySource == 'generated' %}
-                <button type="button" class="btn delete" id="rotate-keys"
-                        data-confirm="{{ 'Every device on your list is bound to the current public key. After rotating, none of them will receive anything until they visit the site and subscribe again. There is no way to undo this. Continue?'|t('schedulr') }}">
-                    {{ 'Rotate the keypair'|t('schedulr') }}
-                </button>
-            {% endif %}
+    {% if publicKey %}
+        {{ forms.copytextField({
+            first: not interop.installed,
+            label: 'VAPID public key'|t('schedulr'),
+            instructions: keySourceLabel,
+            id: 'vapidPublicKey',
+            value: publicKey,
+            class: 'code',
+        }) }}
+    {% else %}
+        <h2{% if not interop.installed %} class="first"{% endif %}>{{ 'VAPID public key'|t('schedulr') }}</h2>
+        <p class="light">{{ keySourceLabel|md(inlineOnly=true) }}</p>
+    {% endif %}
+
+    {% if keySource == 'generated' and not readOnly %}
+        <div class="field">
+            {{ forms.button({
+                id: 'rotate-keys',
+                label: 'Rotate the keypair'|t('schedulr'),
+                class: 'caution',
+                spinner: true,
+                attributes: {
+                    data: {
+                        confirm: 'Every device on your list is bound to the current public key. After rotating, none of them will receive anything until they visit the site and subscribe again. There is no way to undo this. Continue?'|t('schedulr'),
+                    },
+                },
+            }) }}
         </div>
-    </div>
+    {% endif %}
 
     {{ forms.textField({
         label: 'Push subject'|t('schedulr'),
         instructions: 'A {mailto} or {https} URL identifying this site to push services. Enough of them reject an absent one that Schedulr derives a default rather than risk an intermittent failure.'|t('schedulr', {
-            mailto: '<code>mailto:</code>',
-            https: '<code>https:</code>',
+            mailto: '`mailto:`',
+            https: '`https:`',
         }),
+        id: 'pushSubject',
         name: 'settings[pushSubject]',
         value: settings.pushSubject,
         placeholder: 'mailto:you@example.com',
+        errors: settings.getErrors('pushSubject'),
+        disabled: readOnly,
     }) }}
 
     {{ forms.textField({
         label: 'Drop a device after this many consecutive failures'|t('schedulr'),
-        instructions: 'Consecutive, not total — one bad afternoon at a push service does not retire anybody. A permanently unreachable device costs a request on every send.'|t('schedulr'),
+        instructions: 'Consecutive, not total, so one bad afternoon at a push service does not retire anybody. A permanently unreachable device costs a request on every send.'|t('schedulr'),
+        id: 'pushMaxFailures',
         name: 'settings[pushMaxFailures]',
         value: settings.pushMaxFailures,
         size: 4,
         type: 'number',
+        min: 0,
+        errors: settings.getErrors('pushMaxFailures'),
+        disabled: readOnly,
     }) }}
 
-    {{ forms.textField({ label: 'Default icon URL'|t('schedulr'), name: 'settings[defaultIcon]', value: settings.defaultIcon }) }}
-    {{ forms.textField({ label: 'Default badge URL'|t('schedulr'), name: 'settings[defaultBadge]', value: settings.defaultBadge }) }}
+    {{ forms.textField({
+        label: 'Default icon URL'|t('schedulr'),
+        id: 'defaultIcon',
+        name: 'settings[defaultIcon]',
+        value: settings.defaultIcon,
+        type: 'url',
+        errors: settings.getErrors('defaultIcon'),
+        disabled: readOnly,
+    }) }}
+    {{ forms.textField({
+        label: 'Default badge URL'|t('schedulr'),
+        id: 'defaultBadge',
+        name: 'settings[defaultBadge]',
+        value: settings.defaultBadge,
+        type: 'url',
+        errors: settings.getErrors('defaultBadge'),
+        disabled: readOnly,
+    }) }}
 
     <hr>
 
     {{ forms.lightswitchField({
         label: 'Register Schedulr’s service worker'|t('schedulr'),
-        instructions: 'Off leaves push to a worker of your own — or to PWA’s.'|t('schedulr'),
+        instructions: 'Off leaves push to a worker of your own, or to PWA’s.'|t('schedulr'),
+        id: 'registerServiceWorker',
         name: 'settings[registerServiceWorker]',
         on: settings.registerServiceWorker,
+        errors: settings.getErrors('registerServiceWorker'),
+        disabled: readOnly,
     }) }}
 
     {{ forms.textField({
         label: 'Service worker path'|t('schedulr'),
         instructions: 'Must be at the site root. A worker served from a subdirectory can only control that subdirectory, and push to it silently never arrives.'|t('schedulr'),
+        tip: workerUrl ? 'Currently served at {url}.'|t('schedulr', { url: '[' ~ workerUrl ~ '](' ~ workerUrl ~ ')' }) : null,
+        id: 'serviceWorkerPath',
         name: 'settings[serviceWorkerPath]',
         value: settings.serviceWorkerPath,
+        class: 'code',
+        errors: settings.getErrors('serviceWorkerPath'),
+        disabled: readOnly,
     }) }}
-
-    {% if workerUrl %}
-        <p class="light"><a href="{{ workerUrl }}" target="_blank" rel="noopener">{{ workerUrl }}</a></p>
-    {% endif %}
 
     <hr>
 
-    <div class="field">
-        <div class="heading"><label>{{ 'Check the chain'|t('schedulr') }}</label></div>
-        <div class="input">
-            <p class="light">
-                {{ 'Web push fails silently: a push service answers 201 both for a message it will deliver and for one whose encryption is subtly wrong. These two buttons are the only way to find out which without waiting for a campaign.'|t('schedulr') }}
-            </p>
-            <button type="button" class="btn" id="check">{{ 'Check openssl and signing'|t('schedulr') }}</button>
-            <button type="button" class="btn" id="test">{{ 'Send a test to one device'|t('schedulr') }}</button>
-            <div id="check-results" style="margin-top: 10px;"></div>
-        </div>
+    <h2>{{ 'Check the chain'|t('schedulr') }}</h2>
+    <p class="light readable">
+        {{ 'Web push fails silently: a push service answers 201 both for a message it will deliver and for one whose encryption is subtly wrong. These two buttons are the only way to find out which without waiting for a campaign.'|t('schedulr') }}
+    </p>
+    <div class="flex">
+        {{ forms.button({ id: 'check', label: 'Check openssl and signing'|t('schedulr'), spinner: true }) }}
+        {{ forms.button({ id: 'test', label: 'Send a test to one device'|t('schedulr'), spinner: true }) }}
     </div>
-{% endblock %}
+    <div role="status" aria-live="polite"><ul id="check-results" class="schedulr-checks"></ul></div>
 
-{% js %}
-    function guarded(selector, handler) {
-        $(selector).on('click', function() {
-            var message = $(this).data('confirm');
-            if (message && !window.confirm(message)) { return; }
-            handler();
-        });
-    }
+    {% do view.registerTranslations('schedulr', ['Passed', 'Failed']) %}
 
-    function post(action, data) {
-        // Over Ajax, never as a nested form. This pane renders inside Craft's own page form, and a
-        // nested <form> does not merely fail: the HTML parser drops the inner tag and keeps its
-        // children, so a second `action` input lands in the page form and Craft takes the last one.
-        return Craft.sendActionRequest('POST', action, { data: data || {} })
-            .then(function(response) { Craft.cp.displayNotice(response.data.message); return response; })
-            .catch(function(e) {
-                Craft.cp.displayError(e.response && e.response.data ? e.response.data.message : 'Something went wrong.');
-                throw e;
+    {% css %}
+        .schedulr-checks { margin-block-start: var(--m); list-style: none; padding: 0; }
+        .schedulr-checks li { display: flex; align-items: center; gap: var(--s); }
+    {% endcss %}
+
+    {% js %}
+        SchedulrCp.confirmThen('#rotate-keys', function($button) {
+            SchedulrCp.post($button, 'schedulr/settings/rotate-keys', { dropSubscribers: 1 }).then(function(response) {
+                if (response) { window.location.reload(); }
             });
-    }
-
-    guarded('#rotate-keys', function() {
-        post('schedulr/settings/rotate-keys', { dropSubscribers: 1 }).then(function() { window.location.reload(); });
-    });
-
-    $('#adopt-pwa').on('click', function() { post('schedulr/settings/adopt-pwa'); });
-    $('#test').on('click', function() { post('schedulr/settings/test'); });
-
-    $('#check').on('click', function() {
-        Craft.sendActionRequest('POST', 'schedulr/settings/check').then(function(response) {
-            $('#check-results').html(response.data.checks.map(function(check) {
-                return '<p>' + (check.ok ? '✓ ' : '✕ ') + Craft.escapeHtml(check.label) + '</p>';
-            }).join(''));
         });
-    });
-{% endjs %}
+
+        $('#adopt-pwa').on('click', function() { SchedulrCp.post($(this), 'schedulr/settings/adopt-pwa'); });
+        $('#test').on('click', function() { SchedulrCp.post($(this), 'schedulr/settings/test'); });
+
+        $('#check').on('click', function() {
+            SchedulrCp.post($(this), 'schedulr/settings/check').then(function(response) {
+                if (!response) { return; }
+                $('#check-results').html(response.data.checks.map(function(check) {
+                    var state = check.ok ? 'on' : 'off';
+                    var word = check.ok ? Craft.t('schedulr', 'Passed') : Craft.t('schedulr', 'Failed');
+                    return '<li><span class="status ' + state + '" aria-hidden="true"></span>' +
+                        '<span><strong>' + Craft.escapeHtml(word) + ':</strong> ' + Craft.escapeHtml(check.label) + '</span></li>';
+                }).join(''));
+            });
+        });
+    {% endjs %}
+{% endblock %}

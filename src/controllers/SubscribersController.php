@@ -201,7 +201,7 @@ class SubscribersController extends Controller
             }
 
             foreach ($batch as $subscriber) {
-                fputcsv($handle, [
+                fputcsv($handle, ReportsController::csvSafe([
                     $subscriber->id,
                     $subscriber->getStateLabel(),
                     // The address, never the endpoint. A push endpoint is a credential: anyone holding
@@ -217,7 +217,7 @@ class SubscribersController extends Controller
                     $subscriber->dateFirstSeen?->format('Y-m-d H:i'),
                     $subscriber->dateLastSeen?->format('Y-m-d H:i'),
                     $subscriber->dateSubscribed?->format('Y-m-d H:i'),
-                ]);
+                ]));
             }
 
             $offset += 500;

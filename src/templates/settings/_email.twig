@@ -1,40 +1,59 @@
 {% extends 'schedulr/settings/_layout' %}
 {% import '_includes/forms' as forms %}
 
+{#
+  Two things the email channel deliberately does not do, stated up front because both look like
+  missing features until you know why.
+#}
 {% block pane %}
-    <p class="light">
-        {#
-          Two things the email channel deliberately does not do, stated here because both look like
-          missing features until you know why.
-        #}
-        {{ 'One email per recipient, never a Bcc list — a Bcc list discloses your subscribers to each other the first time somebody replies to all, and a per-person unsubscribe link is not optional for a bulk sender.'|t('schedulr') }}
+    <p class="light readable">
+        {{ 'One email per recipient, never a Bcc list. A Bcc list discloses your subscribers to each other the first time somebody replies to all, and a per-person unsubscribe link is not optional for a bulk sender.'|t('schedulr') }}
     </p>
 
     {{ forms.textField({
         label: 'From name'|t('schedulr'),
         instructions: 'Empty uses the system setting.'|t('schedulr'),
+        id: 'emailFromName',
         name: 'settings[emailFromName]',
         value: settings.emailFromName,
+        errors: settings.getErrors('emailFromName'),
+        disabled: readOnly,
     }) }}
 
     {{ forms.textField({
         label: 'From address'|t('schedulr'),
         instructions: 'Empty uses the system setting.'|t('schedulr'),
+        id: 'emailFromEmail',
         name: 'settings[emailFromEmail]',
         value: settings.emailFromEmail,
+        type: 'email',
+        errors: settings.getErrors('emailFromEmail'),
+        disabled: readOnly,
     }) }}
 
     {{ forms.textField({
         label: 'Template'|t('schedulr'),
-        instructions: 'A site template rendered for each email. Empty uses Schedulr’s bundled one, which is deliberately plain — a bundled template that tries to be a designed email is one every site has to override.'|t('schedulr'),
+        instructions: 'A site template rendered for each email. Empty uses Schedulr’s bundled one, which is deliberately plain: a bundled template that tries to be a designed email is one every site has to override.'|t('schedulr'),
+        id: 'emailTemplate',
         name: 'settings[emailTemplate]',
         value: settings.emailTemplate,
         placeholder: '_emails/notification',
+        class: 'code',
+        errors: settings.getErrors('emailTemplate'),
+        disabled: readOnly,
     }) }}
 
-    <div class="readable" style="margin-top: 20px;">
+    <hr>
+
+    <div class="readable">
         <h2>{{ 'What the template receives'|t('schedulr') }}</h2>
         <table class="data fullwidth">
+            <thead>
+                <tr>
+                    <th scope="col">{{ 'Variable'|t('schedulr') }}</th>
+                    <th scope="col">{{ 'Description'|t('app') }}</th>
+                </tr>
+            </thead>
             <tbody>
                 {% for name, description in {
                     'notification': 'The notification element.'|t('schedulr'),
@@ -46,14 +65,14 @@
                     'siteName': 'The current site’s name.'|t('schedulr'),
                 } %}
                     <tr>
-                        <th style="width: 180px;"><code>{{ name }}</code></th>
+                        <th scope="row" class="nowrap"><code>{{ name }}</code></th>
                         <td>{{ description }}</td>
                     </tr>
                 {% endfor %}
             </tbody>
         </table>
         <p class="light">
-            {{ 'Schedulr also sets the {header} headers, so Gmail and Outlook show a one-click unsubscribe — a bulk sender without them is a bulk sender in the spam folder.'|t('schedulr', {
+            {{ 'Schedulr also sets the {header} headers, so Gmail and Outlook show a one-click unsubscribe. A bulk sender without them is a bulk sender in the spam folder.'|t('schedulr', {
                 header: '<code>List-Unsubscribe</code>'
             })|raw }}
         </p>

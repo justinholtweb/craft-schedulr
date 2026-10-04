@@ -6,9 +6,10 @@ namespace justinholtweb\schedulr\queue\jobs;
 
 use Craft;
 use craft\queue\BaseJob;
+use justinholtweb\schedulr\channels\PushChannel;
 use justinholtweb\schedulr\elements\Notification;
-use justinholtweb\schedulr\models\Occurrence;
 use justinholtweb\schedulr\Plugin;
+use yii\queue\RetryableJobInterface;
 
 /**
  * Sends one batch of recipients.
@@ -23,8 +24,11 @@ use justinholtweb\schedulr\Plugin;
  * bad than the one it would introduce (a crash between the two writes means those people never get
  * it at all).
  */
-class SendBatch extends BaseJob
+class SendBatch extends BaseJob implements RetryableJobInterface
 {
+    /** Seconds each push request may take: the Guzzle timeout `PushChannel` sends with. */
+    public const REQUEST_TIMEOUT = PushChannel::REQUEST_TIMEOUT;
+
     public ?int $occurrenceId = null;
     public ?int $notificationId = null;
 
@@ -56,7 +60,7 @@ class SendBatch extends BaseJob
 
         $plugin->notifications->addOutcome($notification->id, $counts['delivered'], $counts['failed']);
 
-        $complete = $plugin->schedules->completeBatch(
+        $totals = $plugin->schedules->completeBatch(
             $this->occurrenceId,
             count($this->subscriberIds),
             $counts['delivered'],
@@ -65,21 +69,18 @@ class SendBatch extends BaseJob
 
         $this->setProgress($queue, 1);
 
-        if (!$complete) {
+        if ($totals === null) {
             return;
         }
 
         // The last batch to finish closes the send. Which one that is depends on how the queue was
-        // drained, which is why it is decided by the atomic counter rather than by batch number.
-        $plugin->schedules->markOccurrence(
-            $this->occurrenceId,
-            $counts['delivered'] > 0 ? Occurrence::STATUS_SENT : Occurrence::STATUS_FAILED,
-            $counts['delivered'] > 0 ? null : 'Nothing was delivered.',
-        );
-
+        // drained, which is why it is decided by the database rather than by batch number — and the
+        // outcome is the *occurrence's* accumulated totals, never this batch's. A send that reached
+        // everybody but the forty people in its final batch is a sent notification, not a failed one.
+        // `completeBatch()` has already written the occurrence's own status from the same totals.
         $plugin->notifications->setState(
             $notification,
-            $counts['delivered'] > 0 ? Notification::STATE_SENT : Notification::STATE_FAILED,
+            $totals['delivered'] > 0 ? Notification::STATE_SENT : Notification::STATE_FAILED,
         );
 
         // Picked only once the whole send is in, or the winner is decided on whichever arm the first
@@ -87,6 +88,34 @@ class SendBatch extends BaseJob
         if (count($notification->getVariants()) > 1) {
             $plugin->notifications->pickWinner($notification->id);
         }
+    }
+
+    /**
+     * Seconds the queue gives this job before presuming its worker dead.
+     *
+     * Craft's default is 300, and a batch of 1,000 against a push service having a slow afternoon can
+     * legitimately take ten times that: every request is allowed `PushChannel`'s full ten-second
+     * timeout. A TTR shorter than the batch's worst case is not a timeout, it is a **re-send** — the
+     * queue releases the job while it is still running, another worker picks it up, and everyone in the
+     * batch is notified twice (this job is not idempotent; see above).
+     *
+     * So: the per-request timeout for every recipient, a fifth again for the email and on-site writes
+     * and the ledger, and a minute of headroom — never less than Craft's own default.
+     */
+    public function getTtr(): int
+    {
+        return max(300, (int)ceil(count($this->subscriberIds) * self::REQUEST_TIMEOUT * 1.2) + 60);
+    }
+
+    /**
+     * Exactly the retry policy the queue would apply without this interface.
+     *
+     * Implementing `RetryableJobInterface` is only for `getTtr()`; it must not change how often a
+     * failed batch is retried, because every retry is a re-send to the people in it.
+     */
+    public function canRetry($attempt, $error): bool
+    {
+        return $attempt < (int)Craft::$app->getQueue()->attempts;
     }
 
     protected function defaultDescription(): ?string

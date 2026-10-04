@@ -76,6 +76,7 @@ class EmailChannel implements ChannelInterface
 
         try {
             $mailer = Craft::$app->getMailer();
+            /** @var \craft\mail\Message $message */
             $message = $mailer->compose();
 
             $from = trim((string)App::parseEnv($settings->emailFromEmail));
@@ -134,11 +135,17 @@ class EmailChannel implements ChannelInterface
      *
      * Signed with Craft's security component rather than carrying a bare ID, so the link in one
      * person's email cannot be edited into a link that unsubscribes somebody else — which is what
-     * `?id=41` in a mailing list footer always turns out to be.
+     * `?id=41` in a mailing list footer always turns out to be. The signed value is purpose-bound
+     * (`Subscribers::unsubscribeToken()`), so no other value the site has ever signed can stand in.
+     *
+     * The same URL serves the `List-Unsubscribe` header. A GET on it only *asks*; the unsubscribe is
+     * the POST — the confirmation form's, or a mail client's RFC 8058 one-click POST — because link
+     * scanners and corporate mail filters fetch every URL in a message, and a GET that acted would
+     * unsubscribe people who never clicked anything.
      */
     private function unsubscribeUrl(Subscriber $subscriber): string
     {
-        $token = Craft::$app->getSecurity()->hashData((string)$subscriber->id);
+        $token = Plugin::getInstance()->subscribers->unsubscribeToken((int)$subscriber->id);
 
         // `token` is reserved by Craft for preview and share tokens: a request carrying `?token=`
         // is rejected in `Application::init()` with "Invalid token" before any controller runs.

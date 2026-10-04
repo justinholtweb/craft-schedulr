@@ -2,38 +2,47 @@
 {% import '_includes/forms' as forms %}
 
 {% block pane %}
-    <p class="light">
-        {#
-          Worth distinguishing from Blaster explicitly, since a site may well run both.
-        #}
-        {{ 'The on-site channel reaches the large majority of visitors who will never grant push permission. It needs nothing from them — no permission, no address.'|t('schedulr') }}
-    </p>
-    <p class="light">
-        {{ 'Sending is not delivering here: a notification sits in the ledger as queued and becomes delivered at the moment somebody actually loads a page and sees it, which may be minutes later or never.'|t('schedulr') }}
-    </p>
+    <div class="readable">
+        <p class="light">
+            {{ 'The on-site channel reaches the large majority of visitors who will never grant push permission. It needs nothing from them: no permission, no address.'|t('schedulr') }}
+        </p>
+        <p class="light">
+            {{ 'Sending is not delivering here: a notification sits in the ledger as queued and becomes delivered at the moment somebody actually loads a page and sees it, which may be minutes later or never.'|t('schedulr') }}
+        </p>
+    </div>
 
     {{ forms.lightswitchField({
         label: 'Render the banner'|t('schedulr'),
         instructions: 'Off leaves {url} available so a site can render notifications in its own UI.'|t('schedulr', {
-            url: '<code>/schedulr/inbox.json</code>'
+            url: '`/schedulr/inbox.json`'
         }),
+        id: 'onSiteRender',
         name: 'settings[onSiteRender]',
         on: settings.onSiteRender,
+        errors: settings.getErrors('onSiteRender'),
+        disabled: readOnly,
     }) }}
 
     {{ forms.selectField({
         label: 'Position'|t('schedulr'),
+        id: 'onSitePosition',
         name: 'settings[onSitePosition]',
         options: positions,
         value: settings.onSitePosition,
+        errors: settings.getErrors('onSitePosition'),
+        disabled: readOnly,
     }) }}
 
     {{ forms.textField({
         label: 'Dismiss itself after'|t('schedulr'),
-        instructions: 'Seconds. Zero waits for a click. Timing out is never recorded as a dismissal — counting it would turn every unattended tab into a rejection and make the one honest negative signal useless.'|t('schedulr'),
+        instructions: 'Seconds. Zero waits for a click. Timing out is never recorded as a dismissal: counting it would turn every unattended tab into a rejection and make the one honest negative signal useless.'|t('schedulr'),
+        id: 'onSiteAutoDismiss',
         name: 'settings[onSiteAutoDismiss]',
         value: settings.onSiteAutoDismiss,
         size: 4,
         type: 'number',
+        min: 0,
+        errors: settings.getErrors('onSiteAutoDismiss'),
+        disabled: readOnly,
     }) }}
 {% endblock %}

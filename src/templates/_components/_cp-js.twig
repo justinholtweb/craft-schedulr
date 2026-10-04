@@ -1,0 +1,54 @@
+{#
+  The one Ajax helper the CP screens share.
+
+  Every button that posts over Ajax goes through `SchedulrCp.post()`, so each one gets the same busy
+  state (Craft's `.loading` spinner plus `aria-busy`), the same notice on success, and a translated
+  message on failure. It resolves to the response, or to `null` on failure, and never rejects, so a
+  caller cannot leave an unhandled rejection behind.
+
+  `SchedulrCp.confirmThen()` honours a button's `data-confirm`. Craft's own `data-confirm` handling
+  only applies to `.formsubmit` elements, so on a plain Ajax button the attribute does nothing unless
+  something reads it.
+
+  Include it inside a block, once per page.
+#}
+{% do view.registerTranslations('schedulr', [
+    'Something went wrong.',
+]) %}
+
+{% js %}
+    window.SchedulrCp = window.SchedulrCp || {
+        post: function($button, action, data) {
+            $button.addClass('loading').attr('aria-busy', 'true').prop('disabled', true);
+
+            return Craft.sendActionRequest('POST', action, { data: data || {} })
+                .then(function(response) {
+                    if (response.data && response.data.message) {
+                        Craft.cp.displayNotice(response.data.message);
+                    }
+                    return response;
+                })
+                .catch(function(e) {
+                    var message = e && e.response && e.response.data && e.response.data.message
+                        ? e.response.data.message
+                        : Craft.t('schedulr', 'Something went wrong.');
+                    Craft.cp.displayError(message);
+                    return null;
+                })
+                .then(function(response) {
+                    $button.removeClass('loading').removeAttr('aria-busy').prop('disabled', false);
+                    return response;
+                });
+        },
+
+        confirmThen: function(selector, handler) {
+            $(selector).on('click', function() {
+                var message = $(this).data('confirm');
+                if (message && !window.confirm(message)) {
+                    return;
+                }
+                handler($(this));
+            });
+        }
+    };
+{% endjs %}

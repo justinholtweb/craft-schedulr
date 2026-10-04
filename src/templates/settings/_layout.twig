@@ -1,20 +1,39 @@
+{#
+  The settings shell. Seven panes, each posting only its own fields, which is why the save merges into
+  the existing settings rather than replacing them.
+
+  `readOnly` arrives from SettingsController when `allowAdminChanges` is off: the panes stay viewable,
+  every input renders disabled, and there is no form or save button to press.
+#}
 {% extends 'schedulr/_layouts/cp' %}
 {% import '_includes/forms' as forms %}
 
-{% set fullPageForm = true %}
+{% set readOnly = readOnly ?? false %}
+{% set fullPageForm = not readOnly %}
 {% set selectedSubnavItem = 'settings' %}
 {% set crumbs = [
     { label: 'Schedulr'|t('schedulr'), url: url('schedulr') },
     { label: 'Settings'|t('schedulr'), url: url('schedulr/settings') },
 ] %}
 
-{% block sidebar %}{% include 'schedulr/settings/_nav' %}{% endblock %}
+{% if readOnly %}
+    {% set contentNotice = readOnlyNotice() %}
+{% endif %}
+
+{% block sidebar %}
+    {% include '_includes/nav' with {
+        label: 'Settings'|t('schedulr'),
+        items: panes|map((label, handle) => { label: label, url: 'schedulr/settings/' ~ handle }),
+        selectedItem: selectedPane,
+    } only %}
+{% endblock %}
 
 {% block content %}
-    <input type="hidden" name="action" value="schedulr/settings/save">
-    {{ redirectInput('schedulr/settings/' ~ selectedPane) }}
-
-    <h1 style="margin-bottom: 20px;">{{ paneLabel }}</h1>
+    {% if not readOnly %}
+        {{ actionInput('schedulr/settings/save') }}
+        {{ redirectInput('schedulr/settings/' ~ selectedPane) }}
+        {{ hiddenInput('pane', selectedPane) }}
+    {% endif %}
 
     {% block pane %}{% endblock %}
 {% endblock %}

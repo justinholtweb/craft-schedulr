@@ -1,5 +1,6 @@
 {% extends 'schedulr/_layouts/cp' %}
 {% import '_includes/forms' as forms %}
+{% import 'schedulr/_components/_macros' as ui %}
 
 {% set fullPageForm = true %}
 {% set selectedSubnavItem = 'notifications' %}
@@ -8,28 +9,26 @@
     { label: 'Notifications'|t('schedulr'), url: url('schedulr/notifications') },
 ] %}
 
-{% block actionButton %}
-    <div class="btngroup">
-        <button type="submit" class="btn submit">{{ 'Save'|t('app') }}</button>
-        {% if canSend %}
-            {#
-              A separate button, not a checkbox, and its own permission. Writing a notification and
-              putting it on a hundred thousand lock screens are different acts, and a save must never
-              quietly do the second.
-            #}
-            <button type="submit" class="btn" name="sendNow" value="1"
-                    data-confirm="{{ 'Send this notification now? It cannot be recalled.'|t('schedulr') }}">
-                {{ 'Save and send now'|t('schedulr') }}
-            </button>
-        {% endif %}
-    </div>
-{% endblock %}
+{#
+  "Save and send now" is a form action, not a checkbox, and has its own permission. Writing a
+  notification and putting it on a hundred thousand lock screens are different acts, and a save must
+  never quietly do the second. It lives in Craft's save menu, which is what honours `confirm`.
+#}
+{% if canSend %}
+    {% set formActions = [
+        {
+            label: 'Save and send now'|t('schedulr'),
+            params: { sendNow: 1 },
+            confirm: 'Send this notification now? It cannot be recalled.'|t('schedulr'),
+        },
+    ] %}
+{% endif %}
 
 {% block content %}
-    <input type="hidden" name="action" value="schedulr/notifications/save">
+    {{ actionInput('schedulr/notifications/save') }}
     {{ redirectInput('schedulr/notifications/{id}') }}
-    {% if notification.id %}<input type="hidden" name="notificationId" value="{{ notification.id }}">{% endif %}
-    <input type="hidden" name="siteId" value="{{ notification.siteId }}">
+    {% if notification.id %}{{ hiddenInput('notificationId', notification.id) }}{% endif %}
+    {{ hiddenInput('siteId', notification.siteId, { id: 'siteId' }) }}
 
     {{ forms.textField({
         first: true,
@@ -74,6 +73,7 @@
         options: channelOptions,
         values: notification.getChannels(),
         required: true,
+        errors: notification.getErrors('channels'),
     }) }}
 
     {% if isPro %}
@@ -83,38 +83,25 @@
             name: 'dedupePolicy',
             options: dedupeOptions,
             value: notification.dedupePolicy,
+            errors: notification.getErrors('dedupePolicy'),
         }) }}
     {% endif %}
 
-    <div class="field">
-        <div class="heading"><label>{{ 'Audience'|t('schedulr') }}</label></div>
-        <div class="input">
-            <div class="flex flex-nowrap">
-                <div class="flex-grow">
-                    {{ forms.select({
-                        id: 'audienceId',
-                        name: 'audienceId',
-                        options: [{ label: 'Everyone reachable'|t('schedulr'), value: '' }]|merge(
-                            audiences|map(a => { label: a.name ~ ' — ' ~ a.getCountLabel(), value: a.id })|values
-                        ),
-                        value: notification.audienceId,
-                        disabled: not isPro and audiences|length == 0,
-                    }) }}
-                </div>
-                <div>
-                    <button type="button" class="btn" id="preview-audience">{{ 'Count'|t('schedulr') }}</button>
-                </div>
-                <div class="flex-grow">
-                    <span id="audience-count" class="light"></span>
-                </div>
-            </div>
-        </div>
-        {% if not isPro %}
-            <p class="light">
-                {{ 'Saved audiences need Schedulr Pro. Topics below work in every edition.'|t('schedulr') }}
-            </p>
-        {% endif %}
-    </div>
+    {{ forms.selectField({
+        label: 'Audience'|t('schedulr'),
+        id: 'audienceId',
+        name: 'audienceId',
+        options: [{ label: 'Everyone reachable'|t('schedulr'), value: '' }]|merge(
+            audiences|map(a => {
+                label: '{name} ({size})'|t('schedulr', { name: a.name, size: a.getCountLabel() }),
+                value: a.id,
+            })|values
+        ),
+        value: notification.audienceId,
+        disabled: not isPro and audiences|length == 0,
+        warning: not isPro ? 'Saved audiences need Schedulr Pro. Topics below work in every edition.'|t('schedulr') : null,
+        errors: notification.getErrors('audienceId'),
+    }) }}
 
     {{ forms.textField({
         label: 'Topics'|t('schedulr'),
@@ -122,7 +109,17 @@
         id: 'topics',
         name: 'topics',
         value: notification.getTopics()|join(', '),
+        errors: notification.getErrors('topics'),
     }) }}
+
+    {#
+      The audience count is the most useful thing on this screen: "4,812 people" beside the send
+      button is what turns a send from a leap into a decision.
+    #}
+    <div class="flex">
+        {{ forms.button({ id: 'preview-audience', label: 'Count recipients'|t('schedulr'), spinner: true }) }}
+        <span id="audience-count" class="light" role="status" aria-live="polite"></span>
+    </div>
 
     <hr>
 
@@ -161,7 +158,7 @@
             label: 'How often'|t('schedulr'),
             id: 'frequency',
             name: 'frequency',
-            options: [{ label: '—', value: '' }]|merge(
+            options: [{ label: 'Choose…'|t('schedulr'), value: '' }]|merge(
                 frequencyOptions|keys|map(k => { label: frequencyOptions[k], value: k })|values
             ),
             value: schedule.frequency,
@@ -178,6 +175,9 @@
             value: schedule.interval,
             size: 4,
             type: 'number',
+            min: 1,
+            max: 365,
+            errors: schedule.getErrors('interval'),
         }) }}
 
         <div id="freq-weekly" class="{{ schedule.frequency == 'weekly' ? '' : 'hidden' }}">
@@ -194,10 +194,11 @@
         <div id="freq-monthly" class="{{ schedule.frequency == 'monthly' ? '' : 'hidden' }}">
             {{ forms.textField({
                 label: 'On these days of the month'|t('schedulr'),
-                instructions: 'Comma separated. Use -1 for the last day — “31” silently skips February.'|t('schedulr'),
+                instructions: 'Comma separated. Use -1 for the last day, because “31” silently skips February.'|t('schedulr'),
                 id: 'byMonthDay',
                 name: 'byMonthDay',
                 value: schedule.getByMonthDay()|join(', '),
+                errors: schedule.getErrors('byMonthDay'),
             }) }}
         </div>
 
@@ -205,9 +206,11 @@
             label: 'At'|t('schedulr'),
             id: 'timeOfDay',
             name: 'timeOfDay',
+            instructions: '24-hour {format}.'|t('schedulr', { format: '`HH:MM`' }),
             value: schedule.timeOfDay ?? '09:00',
             placeholder: '09:00',
             size: 6,
+            errors: schedule.getErrors('timeOfDay'),
         }) }}
 
         {{ forms.dateField({
@@ -215,6 +218,7 @@
             id: 'startDate',
             name: 'startDate',
             value: schedule.startDate,
+            errors: schedule.getErrors('startDate'),
         }) }}
 
         {{ forms.dateField({
@@ -233,6 +237,8 @@
             value: schedule.maxOccurrences,
             size: 5,
             type: 'number',
+            min: 1,
+            errors: schedule.getErrors('maxOccurrences'),
         }) }}
 
         {{ forms.textareaField({
@@ -242,6 +248,8 @@
             name: 'exclusions',
             value: schedule.getExclusions()|join("\n"),
             rows: 3,
+            class: 'code',
+            errors: schedule.getErrors('exclusions'),
         }) }}
     </div>
 
@@ -249,13 +257,14 @@
         {% if isPro %}
             {{ forms.selectField({
                 label: 'Trigger'|t('schedulr'),
-                instructions: 'This notification becomes a template. Each firing produces its own notification, with its own record of who it reached — so “which article did we push on Tuesday” has an answer.'|t('schedulr'),
+                instructions: 'This notification becomes a template. Each firing produces its own notification, with its own record of who it reached, so “which article did we push on Tuesday” has an answer.'|t('schedulr'),
                 id: 'triggerType',
                 name: 'triggerType',
-                options: [{ label: '—', value: '' }]|merge(
+                options: [{ label: 'Choose…'|t('schedulr'), value: '' }]|merge(
                     triggerOptions|keys|map(k => { label: triggerOptions[k], value: k })|values
                 ),
                 value: notification.triggerType,
+                errors: notification.getErrors('triggerType'),
             }) }}
 
             <div data-trigger-pane="entry.published" class="{{ notification.triggerType == 'entry.published' ? '' : 'hidden' }}">
@@ -277,7 +286,7 @@
                 }) }}
 
                 <p class="light">
-                    {{ 'The title, body and link may use Twig against the entry — for example {example}.'|t('schedulr', {
+                    {{ 'The title, body and link may use Twig against the entry, for example {example}.'|t('schedulr', {
                         example: '<code>{{ entry.title }}</code>'
                     })|raw }}
                 </p>
@@ -301,13 +310,14 @@
                     value: notification.getTriggerConfig().days ?? 30,
                     size: 5,
                     type: 'number',
+                    min: 1,
+                    tip: 'Each person receives this once, ever.'|t('schedulr'),
                 }) }}
-                <p class="light">{{ 'Each person receives this once, ever.'|t('schedulr') }}</p>
             </div>
         {% else %}
-            <div class="warning with-icon">
+            <blockquote class="note warning">
                 <p>{{ 'Automations need Schedulr Pro.'|t('schedulr') }}</p>
-            </div>
+            </blockquote>
         {% endif %}
     </div>
 
@@ -320,42 +330,48 @@
             options: timezoneModeOptions,
             value: schedule.timezoneMode,
             disabled: not isPro,
+            warning: not isPro ? 'Requires Schedulr Pro.'|t('schedulr') : null,
+            errors: schedule.getErrors('timezoneMode'),
         }) }}
     {% endif %}
 
     {% if upcoming|length %}
-        <div class="field">
-            <div class="heading"><label>{{ 'Next sends'|t('schedulr') }}</label></div>
-            <div class="input">
-                <table class="data fullwidth">
-                    <tbody>
-                        {% for occurrence in upcoming %}
-                            <tr>
-                                <td>{{ occurrence.dueAt|datetime('short') }}</td>
-                                <td class="light">{{ occurrence.timezone ?? 'site time'|t('schedulr') }}</td>
-                                <td class="light">{{ occurrence.getStatusLabel() }}</td>
-                            </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-        </div>
+        <h3>{{ 'Next sends'|t('schedulr') }}</h3>
+        <table class="data fullwidth">
+            <thead>
+                <tr>
+                    <th scope="col">{{ 'Due'|t('schedulr') }}</th>
+                    <th scope="col">{{ 'Time zone'|t('schedulr') }}</th>
+                    <th scope="col">{{ 'Status'|t('schedulr') }}</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for occurrence in upcoming %}
+                    <tr>
+                        <td>{{ occurrence.dueAt|datetime('short') }}</td>
+                        <td class="light">{{ occurrence.timezone ?? 'Site time'|t('schedulr') }}</td>
+                        <td class="light">{{ occurrence.getStatusLabel() }}</td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
     {% endif %}
 
     <hr>
 
     <h2>{{ 'Appearance'|t('schedulr') }}</h2>
 
-    {{ forms.textField({ label: 'Icon URL'|t('schedulr'), id: 'iconUrl', name: 'iconUrl', value: notification.iconUrl }) }}
-    {{ forms.textField({ label: 'Badge URL'|t('schedulr'), instructions: 'Monochrome, for the Android status bar.'|t('schedulr'), id: 'badgeUrl', name: 'badgeUrl', value: notification.badgeUrl }) }}
-    {{ forms.textField({ label: 'Image URL'|t('schedulr'), id: 'imageUrl', name: 'imageUrl', value: notification.imageUrl }) }}
+    {{ forms.textField({ label: 'Icon URL'|t('schedulr'), id: 'iconUrl', name: 'iconUrl', value: notification.iconUrl, errors: notification.getErrors('iconUrl') }) }}
+    {{ forms.textField({ label: 'Badge URL'|t('schedulr'), instructions: 'Monochrome, for the Android status bar.'|t('schedulr'), id: 'badgeUrl', name: 'badgeUrl', value: notification.badgeUrl, errors: notification.getErrors('badgeUrl') }) }}
+    {{ forms.textField({ label: 'Image URL'|t('schedulr'), id: 'imageUrl', name: 'imageUrl', value: notification.imageUrl, errors: notification.getErrors('imageUrl') }) }}
 
     {{ forms.textField({
         label: 'Collapse key'|t('schedulr'),
-        instructions: 'Two notifications sharing a key replace each other on the device. Worth setting for anything that supersedes itself — a score, a status. Worth leaving empty for anything that does not, or today’s second article eats the first.'|t('schedulr'),
+        instructions: 'Two notifications sharing a key replace each other on the device. Worth setting for anything that supersedes itself, such as a score or a status. Worth leaving empty for anything that does not, or today’s second article eats the first.'|t('schedulr'),
         id: 'tag',
         name: 'tag',
         value: notification.tag,
+        errors: notification.getErrors('tag'),
     }) }}
 
     {{ forms.lightswitchField({
@@ -366,21 +382,27 @@
         on: notification.requireInteraction,
     }) }}
 
-    <div class="field">
-        <div class="heading">
-            <label>{{ 'Action buttons'|t('schedulr') }}</label>
-            <div class="instructions"><p>{{ 'Two at most — every browser that supports them shows two, and a third is invisible with no warning.'|t('schedulr') }}</p></div>
-        </div>
-        <div class="input">
-            {% for i in 0..1 %}
-                {% set button = notification.getButtons()[i] ?? { title: '', url: '' } %}
-                <div class="flex" style="margin-bottom: 6px;">
-                    {{ forms.text({ name: 'buttons[' ~ i ~ '][title]', value: button.title, placeholder: 'Label'|t('schedulr') }) }}
-                    {{ forms.text({ name: 'buttons[' ~ i ~ '][url]', value: button.url, placeholder: 'https://…' }) }}
-                </div>
-            {% endfor %}
-        </div>
-    </div>
+    {#
+      Posted as buttons[<row>][title] and buttons[<row>][url]. The controller reads the rows by value,
+      not by key, so Craft's "new1"-style keys for added rows are fine.
+    #}
+    {{ forms.editableTableField({
+        label: 'Action buttons'|t('schedulr'),
+        instructions: 'Two at most. Every browser that supports them shows two, and a third is invisible with no warning.'|t('schedulr'),
+        id: 'buttons',
+        name: 'buttons',
+        cols: {
+            title: { heading: 'Label'|t('schedulr'), type: 'singleline' },
+            url: { heading: 'Link'|t('schedulr'), type: 'url', placeholder: 'https://…' },
+        },
+        rows: notification.getButtons(),
+        addRowLabel: 'Add a button'|t('schedulr'),
+        allowAdd: true,
+        allowDelete: true,
+        allowReorder: true,
+        maxRows: 2,
+        errors: notification.getErrors('buttons'),
+    }) }}
 
     {% if 'email' in notification.getChannels() or notification.emailSubject %}
         <hr>
@@ -389,8 +411,8 @@
             {{ 'A 120-character push title is a poor subject line and a 400-character body is a poor email. Leave these empty to reuse the push copy.'|t('schedulr') }}
         </p>
 
-        {{ forms.textField({ label: 'Subject'|t('schedulr'), id: 'emailSubject', name: 'emailSubject', value: notification.emailSubject }) }}
-        {{ forms.textareaField({ label: 'HTML body'|t('schedulr'), id: 'emailBody', name: 'emailBody', value: notification.emailBody, rows: 8 }) }}
+        {{ forms.textField({ label: 'Subject'|t('schedulr'), id: 'emailSubject', name: 'emailSubject', value: notification.emailSubject, errors: notification.getErrors('emailSubject') }) }}
+        {{ forms.textareaField({ label: 'HTML body'|t('schedulr'), id: 'emailBody', name: 'emailBody', value: notification.emailBody, rows: 8, class: 'code', errors: notification.getErrors('emailBody') }) }}
     {% endif %}
 
     {% if isPro %}
@@ -403,75 +425,100 @@
 
         {% for i in 0..1 %}
             {% set variant = variants[i] ?? null %}
-            <div class="pane" style="margin-bottom: 12px;">
-                <h3>{{ 'Variant {label}'|t('schedulr', { label: i == 0 ? 'A' : 'B' }) }}</h3>
-                <input type="hidden" name="variants[{{ i }}][label]" value="{{ i == 0 ? 'A' : 'B' }}">
-                {% if variant %}<input type="hidden" name="variants[{{ i }}][id]" value="{{ variant.id }}">{% endif %}
+            {% set arm = i == 0 ? 'A' : 'B' %}
+            <h3>{{ 'Variant {label}'|t('schedulr', { label: arm }) }}</h3>
+            {{ hiddenInput('variants[' ~ i ~ '][label]', arm) }}
+            {% if variant %}{{ hiddenInput('variants[' ~ i ~ '][id]', variant.id) }}{% endif %}
 
-                {{ forms.textField({ label: 'Title'|t('app'), name: 'variants[' ~ i ~ '][title]', value: variant.title ?? '', maxlength: 120 }) }}
-                {{ forms.textareaField({ label: 'Body'|t('schedulr'), name: 'variants[' ~ i ~ '][body]', value: variant.body ?? '', rows: 2 }) }}
-                {{ forms.textField({ label: 'Link'|t('schedulr'), name: 'variants[' ~ i ~ '][url]', value: variant.url ?? '' }) }}
-                {{ forms.textField({ label: 'Share of audience (%)'|t('schedulr'), name: 'variants[' ~ i ~ '][share]', value: variant.share ?? 50, size: 4, type: 'number' }) }}
+            {{ forms.textField({ label: 'Title'|t('app'), id: 'variant-' ~ i ~ '-title', name: 'variants[' ~ i ~ '][title]', value: variant.title ?? '', maxlength: 120 }) }}
+            {{ forms.textareaField({ label: 'Body'|t('schedulr'), id: 'variant-' ~ i ~ '-body', name: 'variants[' ~ i ~ '][body]', value: variant.body ?? '', rows: 2 }) }}
+            {{ forms.textField({ label: 'Link'|t('schedulr'), id: 'variant-' ~ i ~ '-url', name: 'variants[' ~ i ~ '][url]', value: variant.url ?? '' }) }}
+            {{ forms.textField({ label: 'Share of audience (%)'|t('schedulr'), id: 'variant-' ~ i ~ '-share', name: 'variants[' ~ i ~ '][share]', value: variant.share ?? 50, size: 4, type: 'number', min: 1, max: 100 }) }}
 
-                {% if variant and variant.delivered %}
-                    <p class="light">
-                        {{ '{delivered} delivered, {clicked} clicked'|t('schedulr', { delivered: variant.delivered, clicked: variant.clicked }) }}
-                        {% if variant.getClickRate() is not null %} — {{ variant.getClickRate() }}%{% endif %}
-                        {% if variant.isWinner %} · <strong>{{ 'winner'|t('schedulr') }}</strong>{% endif %}
-                    </p>
-                {% endif %}
-            </div>
+            {% if variant and variant.delivered %}
+                <p class="light">
+                    {% set rate = variant.getClickRate() %}
+                    {% if rate is not null %}
+                        {{ '{delivered} delivered, {clicked} clicked ({rate}%)'|t('schedulr', { delivered: variant.delivered|number_format, clicked: variant.clicked|number_format, rate: rate }) }}
+                    {% else %}
+                        {{ '{delivered} delivered, {clicked} clicked'|t('schedulr', { delivered: variant.delivered|number_format, clicked: variant.clicked|number_format }) }}
+                    {% endif %}
+                    {% if variant.isWinner %}<strong>{{ 'The winner.'|t('schedulr') }}</strong>{% endif %}
+                </p>
+            {% endif %}
         {% endfor %}
     {% endif %}
 
     {% if funnel|length %}
         <hr>
         <h2>{{ 'Results'|t('schedulr') }}</h2>
+        {% set funnelLabels = {
+            targeted: 'Targeted'|t('schedulr'),
+            delivered: 'Delivered'|t('schedulr'),
+            failed: 'Failed'|t('schedulr'),
+            displayed: 'Shown'|t('schedulr'),
+            clicked: 'Clicked'|t('schedulr'),
+            dismissed: 'Dismissed'|t('schedulr'),
+            clicks: 'Total clicks'|t('schedulr'),
+            deliveryRate: 'Delivery rate'|t('schedulr'),
+            clickRate: 'Click rate'|t('schedulr'),
+            dismissRate: 'Dismiss rate'|t('schedulr'),
+        } %}
         <table class="data fullwidth">
             <tbody>
                 {% for key, value in funnel %}
                     <tr>
-                        <th>{{ key }}</th>
-                        <td>{{ value is null ? '—' : value }}</td>
+                        <th scope="row">{{ funnelLabels[key] ?? key }}</th>
+                        <td>
+                            {% if value is null %}
+                                {{ ui.muted('Not enough data'|t('schedulr')) }}
+                            {% elseif key ends with 'Rate' %}
+                                {{ value }}%
+                            {% else %}
+                                {{ value|number_format }}
+                            {% endif %}
+                        </td>
                     </tr>
                 {% endfor %}
             </tbody>
         </table>
-        <p><a href="{{ url('schedulr/notifications/' ~ notification.id ~ '/deliveries') }}">{{ 'Full delivery log'|t('schedulr') }} &rarr;</a></p>
+        <p><a class="go" href="{{ url('schedulr/notifications/' ~ notification.id ~ '/deliveries') }}">{{ 'Full delivery log'|t('schedulr') }}</a></p>
     {% endif %}
+
+    {% do view.registerTranslations('schedulr', ['Counting…', 'Could not count.']) %}
+
+    {% js %}
+        // Craft's own select toggle builds its target selector as '#' + prefix + value, so a value
+        // containing a dot (entry.published) is parsed by jQuery as an id plus a class and nothing
+        // ever toggles. Done by hand for that one field.
+        function schedulrTriggerPanes() {
+            var value = $('#triggerType').val();
+            $('[data-trigger-pane]').each(function() {
+                $(this).toggleClass('hidden', $(this).data('trigger-pane') !== value);
+            });
+        }
+
+        $('#triggerType').on('change', schedulrTriggerPanes);
+        schedulrTriggerPanes();
+
+        $('#preview-audience').on('click', function() {
+            var $button = $(this).addClass('loading').attr('aria-busy', 'true');
+            var $out = $('#audience-count').text(Craft.t('schedulr', 'Counting…'));
+
+            Craft.sendActionRequest('POST', 'schedulr/notifications/preview-audience', {
+                data: {
+                    siteId: $('#siteId').val(),
+                    audienceId: $('#audienceId').val(),
+                    topics: $('#topics').val(),
+                    channels: $('input[name="channels[]"]:checked').map(function() { return this.value; }).get()
+                }
+            }).then(function(response) {
+                $out.text(response.data.label);
+            }).catch(function() {
+                $out.text(Craft.t('schedulr', 'Could not count.'));
+            }).then(function() {
+                $button.removeClass('loading').removeAttr('aria-busy');
+            });
+        });
+    {% endjs %}
 {% endblock %}
-
-{% js %}
-    // Craft's own select toggle builds its target selector as '#' + prefix + value, so a value
-    // containing a dot — `entry.published` — is parsed by jQuery as an id plus a class and nothing
-    // ever toggles. Done by hand for that one field.
-    function schedulrTriggerPanes() {
-        var value = $('#triggerType').val();
-        $('[data-trigger-pane]').each(function() {
-            $(this).toggleClass('hidden', $(this).data('trigger-pane') !== value);
-        });
-    }
-
-    $('#triggerType').on('change', schedulrTriggerPanes);
-    schedulrTriggerPanes();
-
-    // The audience count is the most useful thing on this screen: "4,812 people" beside the send
-    // button is what turns a send from a leap into a decision.
-    $('#preview-audience').on('click', function() {
-        var $out = $('#audience-count');
-        $out.text({{ 'Counting…'|t('schedulr')|json_encode|raw }});
-
-        Craft.sendActionRequest('POST', 'schedulr/notifications/preview-audience', {
-            data: {
-                siteId: $('input[name="siteId"]').val(),
-                audienceId: $('#audienceId').val(),
-                topics: $('#topics').val(),
-                channels: $('input[name="channels[]"]:checked').map(function() { return this.value; }).get()
-            }
-        }).then(function(response) {
-            $out.text(response.data.label);
-        }).catch(function() {
-            $out.text({{ 'Could not count.'|t('schedulr')|json_encode|raw }});
-        });
-    });
-{% endjs %}

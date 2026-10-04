@@ -90,7 +90,6 @@ class Interop extends Component
 
         try {
             $pwa = Craft::$app->getPlugins()->getPlugin(self::PWA_HANDLE);
-            /** @phpstan-ignore-next-line PWA is not a dependency; this is duck-typed on purpose. */
             $push = $pwa->push;
 
             $public = (string)$push->getPublicKey();
@@ -130,7 +129,6 @@ class Interop extends Component
 
         try {
             $pwa = Craft::$app->getPlugins()->getPlugin(self::PWA_HANDLE);
-            /** @phpstan-ignore-next-line */
             $settings = $pwa->getSettings();
 
             // PWA installed but with its worker switched off leaves the scope free, so Schedulr
@@ -184,11 +182,25 @@ class Interop extends Component
         $primarySiteId = Craft::$app->getSites()->getPrimarySite()->id;
         $now = Db::prepareDateForDb(new DateTime());
         $adopted = [];
+        $refused = 0;
+        $subscribers = Plugin::getInstance()->subscribers;
 
         foreach ($rows as $row) {
-            $hash = (string)$row['endpointHash'];
+            // Recomputed rather than trusted: Schedulr looks rows up by *its* hash of the endpoint, and
+            // a row whose stored hash disagreed would be a subscriber nothing could ever find again.
+            $endpoint = trim((string)$row['endpoint']);
+            $hash = $endpoint !== '' ? hash('sha256', $endpoint) : '';
 
             if ($hash === '' || isset($existing[$hash])) {
+                continue;
+            }
+
+            // PWA's table is filled by PWA's own public subscribe endpoint, whose checks Schedulr does
+            // not control. Adopting a row is storing a URL this server will POST to, so it passes the
+            // same allowlist a fresh subscription does.
+            if (!$subscribers->isAcceptableEndpoint($endpoint)) {
+                $refused++;
+
                 continue;
             }
 
@@ -201,7 +213,7 @@ class Interop extends Component
                 // endpoint would mean the same person looked like two visitors if they ever
                 // resubscribed.
                 'visitorId' => StringHelper::UUID(),
-                'endpoint' => (string)$row['endpoint'],
+                'endpoint' => $endpoint,
                 'endpointHash' => $hash,
                 'p256dh' => (string)$row['p256dh'],
                 'auth' => (string)$row['auth'],
@@ -216,6 +228,10 @@ class Interop extends Component
                 'dateUpdated' => $now,
                 'uid' => StringHelper::UUID(),
             ];
+        }
+
+        if ($refused > 0) {
+            Plugin::warning('Did not adopt ' . $refused . ' PWA subscriber(s) whose endpoint is not on a recognised push service.');
         }
 
         if ($adopted === []) {

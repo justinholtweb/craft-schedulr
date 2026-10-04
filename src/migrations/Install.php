@@ -5,6 +5,7 @@ namespace justinholtweb\schedulr\migrations;
 use craft\db\Migration;
 use craft\db\Table as CraftTable;
 use justinholtweb\schedulr\db\Table;
+use justinholtweb\schedulr\elements\Notification;
 
 /**
  * Schedulr's schema.
@@ -26,6 +27,11 @@ class Install extends Migration
 
     public function safeDown(): bool
     {
+        // The element rows first. Dropping the sub-table leaves `elements` rows of a type whose class
+        // is about to stop existing, and Craft then throws on them from every element query that
+        // doesn't filter by type — search, relations, garbage collection — long after the uninstall.
+        $this->delete(CraftTable::ELEMENTS, ['type' => Notification::class]);
+
         // Reverse order of creation, so a foreign key never outlives the table it points into.
         foreach ([
             Table::EVENTS,

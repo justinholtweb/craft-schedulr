@@ -133,7 +133,7 @@ class NotificationsController extends Controller
         $this->stdout(sprintf(
             "Notification #%d queued to %d recipient(s). Run the queue to deliver it.\n",
             $notification->id,
-            $occurrence?->targeted ?? 0,
+            $occurrence->targeted ?? 0,
         ), Console::FG_GREEN);
 
         return ExitCode::OK;
@@ -163,7 +163,7 @@ class NotificationsController extends Controller
         $plugin->notifications->resetCounters($notification->id);
         $occurrence = $plugin->sender->sendNow($notification);
 
-        $this->stdout(sprintf("Queued to %d recipient(s).\n", $occurrence?->targeted ?? 0), Console::FG_GREEN);
+        $this->stdout(sprintf("Queued to %d recipient(s).\n", $occurrence->targeted ?? 0), Console::FG_GREEN);
 
         return ExitCode::OK;
     }

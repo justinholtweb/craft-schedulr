@@ -45,7 +45,7 @@ class ScheduleController extends Controller
         $titles = [];
 
         foreach ($ids as $id) {
-            $titles[$id] = $plugin->notifications->getById($id)?->title
+            $titles[$id] = $plugin->notifications->getById($id)->title
                 ?? Craft::t('schedulr', '(deleted)');
         }
 

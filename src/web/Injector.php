@@ -168,8 +168,10 @@ class Injector
         }
 
         // A `<script>` element holds raw text — HTML entities in it are never decoded — so the config
-        // is carried as JSON rather than escaped markup.
-        $out .= Html::script('window.__SCHEDULR__=' . Json::encode($config) . ';');
+        // is carried as JSON rather than escaped markup. `htmlEncode()`, not `encode()`: it escapes
+        // `<`, `>` and `&` as `\u003C` and friends, so a prompt heading containing `</script>` ends a
+        // JSON string rather than the script element.
+        $out .= Html::script('window.__SCHEDULR__=' . Json::htmlEncode($config) . ';');
         $out .= Html::script($runtime);
 
         return $out;

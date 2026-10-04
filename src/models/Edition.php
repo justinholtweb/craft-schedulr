@@ -19,6 +19,31 @@ namespace justinholtweb\schedulr\models;
  *
  * There is deliberately **no limit on subscribers or on notifications sent**. Charging for the
  * number that grows with a site's success is the wrong shape of pricing for this tool.
+ *
+ * ## A downgrade, not a wall
+ *
+ * Every gate here answers "may this site **create or change** this configuration?" — it is read by
+ * the editors and controllers. None of them is read at send time. Configuration saved while the site
+ * was Pro keeps doing exactly what it did after a licence lapses, because the alternative turns a
+ * billing event into a behaviour change nobody asked for, and the worst of those — a segmented send
+ * quietly becoming a send to everybody — is not recoverable once it has gone out. Per feature:
+ *
+ * | Feature | Lite cannot… | …but a saved one keeps |
+ * |---|---|---|
+ * | Segments | create a segment or point a notification at one | filtering every send to its audience |
+ * | Per-subscriber time zones | switch a schedule to them | fanning out one occurrence per zone, on re-save too |
+ * | Automations | create or re-target a trigger | firing — save hook, win-back sweep, scheduled entries |
+ * | A/B testing | add a variant | splitting the audience across its arms and picking a winner |
+ * | Dedupe policy | choose a policy (new notifications keep the default) | being applied between channels |
+ * | Frequency caps | change the caps in settings | excluding over-cap subscribers |
+ * | Prompt styles | choose a Pro style | prompting — in the nearest Lite style, the bell (`web\Injector`) |
+ * | Export | export | — (nothing to keep; it is an action, not configuration) |
+ *
+ * **Click tracking is the one exception, and it is deliberate.** It is not saved configuration but
+ * something done *to each new send* — the redirect is written into the payload at send time — so on
+ * Lite new sends carry the destination URL directly and are not counted. Every send already tracked
+ * keeps its redirect working and its clicks counting, because those URLs are already on people's
+ * devices; the funnel built on them is what Lite stops showing.
  */
 class Edition
 {
@@ -83,7 +108,10 @@ class Edition
         return $isPro;
     }
 
-    /** Per-channel dedupe policy. Lite sends every enabled channel to everyone reachable on it. */
+    /**
+     * Choosing a per-channel dedupe policy. A new Lite notification keeps the default — every enabled
+     * channel to everyone reachable on it — but a policy already saved is applied whatever the edition.
+     */
     public static function allowsDedupePolicy(bool $isPro): bool
     {
         return $isPro;

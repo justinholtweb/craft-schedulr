@@ -1,10 +1,15 @@
 {% extends 'schedulr/_layouts/cp' %}
+{% import '_includes/forms' as forms %}
 
 {% set selectedSubnavItem = 'schedule' %}
 
 {% block actionButton %}
     {% if canSend %}
-        <button type="button" class="btn" id="run-now">{{ 'Run now'|t('schedulr') }}</button>
+        {{ forms.button({
+            id: 'run-now',
+            label: 'Run now'|t('schedulr'),
+            spinner: true,
+        }) }}
     {% endif %}
 {% endblock %}
 
@@ -12,37 +17,25 @@
     {#
       The banner leads. A beautiful list of sends that nothing will ever act on is precisely the
       failure this whole design is arranged to avoid, so the health of the runner is the first thing
-      on the screen — above the list it would otherwise make a liar of.
+      on the screen, above the list it would otherwise make a liar of.
     #}
     {% include 'schedulr/_components/_runner-banner' %}
 
-    <div class="flex" style="gap: 32px; margin-bottom: 24px;">
-        <div>
-            <div class="light smalltext">{{ 'Runner'|t('schedulr') }}</div>
-            <div style="font-size: 18px;">
-                {{ {
-                    cron: 'Cron'|t('schedulr'),
-                    web: 'Web requests'|t('schedulr'),
-                    stalled: 'Stalled'|t('schedulr'),
-                    manual: 'Off'|t('schedulr'),
-                }[health.state] ?? health.state }}
-            </div>
-        </div>
-        <div>
-            <div class="light smalltext">{{ 'Last run'|t('schedulr') }}</div>
-            <div style="font-size: 18px;">
-                {{ health.lastCron ? health.lastCron|datetime('short') : (health.lastWeb ? health.lastWeb|datetime('short') : 'never'|t('schedulr')) }}
-            </div>
-        </div>
-        <div>
-            <div class="light smalltext">{{ 'Pending'|t('schedulr') }}</div>
-            <div style="font-size: 18px;">{{ health.pending }}</div>
-        </div>
-        <div>
-            <div class="light smalltext">{{ 'Overdue'|t('schedulr') }}</div>
-            <div style="font-size: 18px;{{ health.overdue ? ' color: #CF1124;' : '' }}">{{ health.overdue }}</div>
-        </div>
-    </div>
+    {% set lastRun = health.lastCron ?? health.lastWeb %}
+
+    {% include 'schedulr/_components/_stats' with {
+        stats: [
+            { label: 'Runner'|t('schedulr'), value: {
+                cron: 'Cron'|t('schedulr'),
+                web: 'Web requests'|t('schedulr'),
+                stalled: 'Stalled'|t('schedulr'),
+                manual: 'Off'|t('schedulr'),
+            }[health.state] ?? health.state },
+            { label: 'Last run'|t('schedulr'), value: lastRun ? lastRun|datetime('short') : 'Never'|t('schedulr') },
+            { label: 'Pending'|t('schedulr'), value: health.pending|number_format },
+            { label: 'Overdue'|t('schedulr'), value: health.overdue|number_format, tone: health.overdue ? 'error' : null },
+        ],
+    } only %}
 
     <h2>{{ 'Coming up'|t('schedulr') }}</h2>
 
@@ -50,10 +43,10 @@
         <table class="data fullwidth">
             <thead>
                 <tr>
-                    <th>{{ 'Due'|t('schedulr') }}</th>
-                    <th>{{ 'Time zone'|t('schedulr') }}</th>
-                    <th>{{ 'Notification'|t('schedulr') }}</th>
-                    <th>{{ 'Status'|t('schedulr') }}</th>
+                    <th scope="col">{{ 'Due'|t('schedulr') }}</th>
+                    <th scope="col">{{ 'Time zone'|t('schedulr') }}</th>
+                    <th scope="col">{{ 'Notification'|t('schedulr') }}</th>
+                    <th scope="col">{{ 'Status'|t('schedulr') }}</th>
                 </tr>
             </thead>
             <tbody>
@@ -61,14 +54,13 @@
                     <tr>
                         <td>{{ occurrence.dueAt|datetime('short') }}</td>
                         {#
-                          Blank rather than "—" for a site-time send: a column full of dashes reads as
-                          missing data, and the absence of a zone here means "one moment for everybody",
-                          which is the normal case.
+                          A site-time send has no zone of its own: it is one moment for everybody, which
+                          is the normal case, so it says so in words rather than leaving a gap.
                         #}
-                        <td class="light">{{ occurrence.timezone ?? '' }}</td>
+                        <td class="light">{{ occurrence.timezone ?? 'Site time'|t('schedulr') }}</td>
                         <td>
                             <a href="{{ url('schedulr/notifications/' ~ occurrence.notificationId) }}">
-                                {{ titles[occurrence.notificationId] ?? '(deleted)' }}
+                                {{ titles[occurrence.notificationId] ?? '(deleted)'|t('schedulr') }}
                             </a>
                         </td>
                         <td class="light">{{ occurrence.getStatusLabel() }}</td>
@@ -77,21 +69,23 @@
             </tbody>
         </table>
     {% else %}
-        <p class="light">{{ 'Nothing is scheduled.'|t('schedulr') }}</p>
+        <p class="zilch small">{{ 'Nothing is scheduled.'|t('schedulr') }}</p>
     {% endif %}
 
-    <h2 style="margin-top: 32px;">{{ 'Recently'|t('schedulr') }}</h2>
+    <hr>
+
+    <h2>{{ 'Recently'|t('schedulr') }}</h2>
 
     {% if recent|length %}
         <table class="data fullwidth">
             <thead>
                 <tr>
-                    <th>{{ 'Due'|t('schedulr') }}</th>
-                    <th>{{ 'Notification'|t('schedulr') }}</th>
-                    <th>{{ 'Status'|t('schedulr') }}</th>
-                    <th>{{ 'Targeted'|t('schedulr') }}</th>
-                    <th>{{ 'Delivered'|t('schedulr') }}</th>
-                    <th>{{ 'Failed'|t('schedulr') }}</th>
+                    <th scope="col">{{ 'Due'|t('schedulr') }}</th>
+                    <th scope="col">{{ 'Notification'|t('schedulr') }}</th>
+                    <th scope="col">{{ 'Status'|t('schedulr') }}</th>
+                    <th scope="col">{{ 'Targeted'|t('schedulr') }}</th>
+                    <th scope="col">{{ 'Delivered'|t('schedulr') }}</th>
+                    <th scope="col">{{ 'Failed'|t('schedulr') }}</th>
                 </tr>
             </thead>
             <tbody>
@@ -100,13 +94,13 @@
                         <td>{{ occurrence.dueAt|datetime('short') }}</td>
                         <td>
                             <a href="{{ url('schedulr/notifications/' ~ occurrence.notificationId) }}">
-                                {{ titles[occurrence.notificationId] ?? '(deleted)' }}
+                                {{ titles[occurrence.notificationId] ?? '(deleted)'|t('schedulr') }}
                             </a>
                         </td>
                         <td>{{ occurrence.getStatusLabel() }}</td>
-                        <td>{{ occurrence.targeted }}</td>
-                        <td>{{ occurrence.delivered }}</td>
-                        <td>{{ occurrence.failed ?: '' }}</td>
+                        <td>{{ occurrence.targeted|number_format }}</td>
+                        <td>{{ occurrence.delivered|number_format }}</td>
+                        <td>{{ occurrence.failed ? occurrence.failed|number_format : '' }}</td>
                     </tr>
                     {% if occurrence.lastError %}
                         <tr><td colspan="6" class="light smalltext">{{ occurrence.lastError }}</td></tr>
@@ -115,22 +109,21 @@
             </tbody>
         </table>
     {% else %}
-        <p class="light">{{ 'Nothing has been sent yet.'|t('schedulr') }}</p>
+        <p class="zilch small">{{ 'Nothing has been sent yet.'|t('schedulr') }}</p>
+    {% endif %}
+
+    {% if canSend %}
+        {% include 'schedulr/_components/_cp-js' %}
+
+        {% js %}
+            // Present because the first thing anybody does when a scheduled send has not arrived is
+            // look for a button that makes it happen, and the second is to reach for a console they
+            // cannot open.
+            $('#run-now').on('click', function() {
+                SchedulrCp.post($(this), 'schedulr/schedule/run').then(function(response) {
+                    if (response) { window.location.reload(); }
+                });
+            });
+        {% endjs %}
     {% endif %}
 {% endblock %}
-
-{% js %}
-    // Present because the first thing anybody does when a scheduled send has not arrived is look for
-    // a button that makes it happen — and the second is to reach for a console they cannot open.
-    $('#run-now').on('click', function() {
-        var $button = $(this).addClass('disabled').attr('disabled', true);
-
-        Craft.sendActionRequest('POST', 'schedulr/schedule/run').then(function(response) {
-            Craft.cp.displayNotice(response.data.message);
-            window.location.reload();
-        }).catch(function(e) {
-            Craft.cp.displayError(e.response && e.response.data ? e.response.data.message : 'Something went wrong.');
-            $button.removeClass('disabled').attr('disabled', false);
-        });
-    });
-{% endjs %}

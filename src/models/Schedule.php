@@ -6,10 +6,8 @@ namespace justinholtweb\schedulr\models;
 
 use Craft;
 use craft\base\Model;
-use justinholtweb\schedulr\helpers\Data;
 use DateTime;
-use DateTimeZone;
-use Throwable;
+use justinholtweb\schedulr\helpers\Data;
 
 /**
  * When a notification goes out.

@@ -49,6 +49,7 @@ self.addEventListener('push', (event) => {
           n: payload.n || null,
           v: payload.v || null,
           s: payload.s || null,
+          k: payload.k || null,
         },
       });
 
@@ -67,7 +68,7 @@ self.addEventListener('notificationclick', (event) => {
   const actions = Array.isArray(event.notification.actions) ? event.notification.actions : [];
   const matched = action ? actions.find((a) => a.action === action) : null;
   const raw = (matched && matched.url) || data.url || '/';
-  const target = new URL(raw, self.location.origin).href;
+  const target = safeUrl(raw);
 
   event.waitUntil(
     (async () => {
@@ -136,11 +137,31 @@ async function report(type, data) {
     await fetch(CONFIG.eventUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({ type, n: data.n, v: data.v || null, s: data.s || null }),
+      // `k` is the signature the payload carried for this subscriber. Without it the server cannot
+      // tell this report from anybody else's guess at a subscriber ID, and refuses it.
+      body: JSON.stringify({ type, n: data.n, v: data.v || null, s: data.s || null, k: data.k || null }),
     });
   } catch (e) {
     // An unreported event is not worth failing a notification over.
   }
+}
+
+/**
+ * The URL to open, or the site root when it is not an http(s) one.
+ *
+ * `openWindow()` with a `javascript:` or `data:` URL is refused by current browsers, but "current" is
+ * doing the work in that sentence, and the server already promises it never stores one. Belt and braces.
+ */
+function safeUrl(raw) {
+  try {
+    const url = new URL(raw, self.location.origin);
+
+    if (url.protocol === 'https:' || url.protocol === 'http:') return url.href;
+  } catch (e) {
+    // Unparseable. Falls through to the root.
+  }
+
+  return new URL('/', self.location.origin).href;
 }
 
 function base64ToUint8(value) {

@@ -152,6 +152,18 @@ class Settings extends Model
      */
     public string $serviceWorkerPath = '/schedulr-worker.js';
 
+    /**
+     * @var string[] Extra push-service hosts to accept subscriptions from, on top of the built-in
+     *               list (`services\Subscribers::PUSH_HOSTS`). Each entry matches that host and
+     *               any subdomain of it.
+     *
+     * An allowlist rather than a blocklist because the subscribe endpoint is public: every endpoint
+     * it accepts is a URL this server will POST to on a schedule, so "any https host" is an SSRF
+     * gadget aimed wherever the visitor likes. Every shipping browser uses one of the built-in
+     * services; this exists for the browser that does not yet, and for test harnesses.
+     */
+    public array $extraPushHosts = [];
+
     // ---------------------------------------------------------------------------- email
 
     /**
@@ -281,7 +293,7 @@ class Settings extends Model
             self::PROMPT_NATIVE => Craft::t('schedulr', 'Native browser dialog only'),
             self::PROMPT_BELL => Craft::t('schedulr', 'Bell button'),
             self::PROMPT_SLIDE => Craft::t('schedulr', 'Slide-down panel'),
-            self::PROMPT_CUSTOM => Craft::t('schedulr', 'Custom — my own markup'),
+            self::PROMPT_CUSTOM => Craft::t('schedulr', 'Custom: my own markup'),
         ];
     }
 
@@ -378,6 +390,14 @@ class Settings extends Model
             [['emailFromEmail'], 'email', 'skipOnEmpty' => true],
             [['serviceWorkerPath'], 'match', 'pattern' => '/^\/[A-Za-z0-9._\/-]+\.js$/', 'skipOnEmpty' => true],
             [['excludedUris'], 'safe'],
+            [['extraPushHosts'], 'each', 'rule' => ['match', 'pattern' => '/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i']],
+            // Both land in the worker's config and on every notification that has none of its own, so
+            // they are held to the same rule as a notification's own URLs.
+            [['defaultIcon', 'defaultBadge'], function(string $attribute): void {
+                if (!\justinholtweb\schedulr\elements\Notification::isSafeUrl((string)$this->$attribute)) {
+                    $this->addError($attribute, Craft::t('schedulr', 'Use an http(s) URL or a path on this site.'));
+                }
+            }],
         ];
     }
 }

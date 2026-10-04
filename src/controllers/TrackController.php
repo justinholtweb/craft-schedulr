@@ -7,8 +7,12 @@ namespace justinholtweb\schedulr\controllers;
 use Craft;
 use craft\helpers\UrlHelper;
 use craft\web\Controller;
+use justinholtweb\schedulr\elements\Notification;
 use justinholtweb\schedulr\Plugin;
 use justinholtweb\schedulr\services\Analytics;
+use justinholtweb\schedulr\services\Subscribers;
+use yii\web\BadRequestHttpException;
+use yii\web\NotFoundHttpException;
 use yii\web\Response;
 
 /**
@@ -53,25 +57,27 @@ class TrackController extends Controller
         $params['sr_k'] = (string)$request->getParam('sr_k', '');
 
         $notificationId = (int)($params['sr_n'] ?? 0);
-
-        // An unsigned or badly signed link still *redirects* — it simply is not counted. Refusing to
-        // redirect would punish the reader for a signing mistake on the server's side, and the person
-        // who tapped a notification is entitled to arrive somewhere.
         $counted = $notificationId > 0 && $plugin->analytics->verify($params);
 
-        $destination = $notificationId > 0
-            ? $plugin->analytics->destinationFor(
-                $notificationId,
-                isset($params['sr_v']) ? (int)$params['sr_v'] : null,
-                isset($params['sr_b']) ? (int)$params['sr_b'] : null,
-            )
-            : null;
+        if (!$counted && !$this->mayRedirectUnsigned($notificationId)) {
+            // An unsigned link to a notification that has never gone out is not a link anybody was
+            // sent. Redirecting anyway would turn `/schedulr/go?sr_n=…` into a way to preview, and
+            // be bounced to, the destination of a draft — a notification nobody has approved.
+            throw new NotFoundHttpException();
+        }
+
+        // A badly signed link to a notification that *has* been sent still redirects — it simply is
+        // not counted. The reader who tapped a notification is entitled to arrive somewhere, and a
+        // signing change on the server's side (a rotated security key) must not strand them.
+        $variantId = isset($params['sr_v']) ? (int)$params['sr_v'] : null;
+        $buttonIndex = isset($params['sr_b']) ? (int)$params['sr_b'] : null;
+        $destination = $plugin->analytics->destinationFor($notificationId, $variantId, $buttonIndex);
 
         if ($counted) {
             $plugin->analytics->record(
                 Analytics::EVENT_CLICKED,
                 $notificationId,
-                isset($params['sr_v']) ? (int)$params['sr_v'] : null,
+                $variantId,
                 isset($params['sr_s']) ? (int)$params['sr_s'] : null,
                 (string)$params['sr_c'],
                 $destination,
@@ -83,10 +89,29 @@ class TrackController extends Controller
 
     /**
      * The worker and the on-site runtime reporting what happened.
+     *
+     * Unauthenticated, so it accepts only what it can attribute: the on-site runtime's visitor UUID —
+     * a secret only that browser holds — or, from the worker, a subscriber ID together with the
+     * signature the push payload carried for it. A bare numeric `s` is refused; it would let anybody
+     * write events against every subscriber on the list by counting. Each (type, notification,
+     * subscriber) is written once, so a replayed request grows nothing.
      */
     public function actionEvent(): Response
     {
         $this->requirePostRequest();
+
+        $plugin = Plugin::getInstance();
+
+        if (!$plugin->subscribers->isRuntimeRequest()) {
+            throw new BadRequestHttpException('Expected a JSON request from this site.');
+        }
+
+        if (!$plugin->subscribers->throttle('event', Subscribers::RATE_EVENT)) {
+            $response = $this->asJson(['ok' => false]);
+            $response->setStatusCode(429);
+
+            return $response;
+        }
 
         $body = $this->body();
         $type = (string)($body['type'] ?? '');
@@ -103,46 +128,80 @@ class TrackController extends Controller
             return $this->asJson(['ok' => false]);
         }
 
+        $variantId = isset($body['v']) && is_numeric($body['v']) ? (int)$body['v'] : null;
         $subscriberId = null;
         $raw = $body['s'] ?? null;
 
-        if (is_numeric($raw)) {
-            $subscriberId = (int)$raw;
-        } elseif (is_string($raw) && $raw !== '') {
+        if (is_string($raw) && preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $raw)) {
             // The on-site runtime knows its visitor ID, not its subscriber ID.
-            $subscriberId = Plugin::getInstance()->subscribers
-                ->getByVisitorId($raw, Craft::$app->getSites()->getCurrentSite()->id)?->id;
+            $subscriberId = $plugin->subscribers
+                ->getByVisitorId(strtolower($raw), Craft::$app->getSites()->getCurrentSite()->id)?->id;
+        } elseif (is_numeric($raw) && is_string($body['k'] ?? null)) {
+            $candidate = (int)$raw;
+
+            if ($candidate > 0 && $plugin->analytics->verifyEventSignature($notificationId, $variantId, $candidate, $body['k'])) {
+                $subscriberId = $candidate;
+            }
         }
 
-        Plugin::getInstance()->analytics->record(
-            $type,
-            $notificationId,
-            isset($body['v']) && is_numeric($body['v']) ? (int)$body['v'] : null,
-            $subscriberId,
-            isset($body['channel']) ? (string)$body['channel'] : null,
-        );
+        if ($subscriberId === null) {
+            // Unattributable. An anonymous event row is noise in every rate that divides by people,
+            // and accepting them is the unbounded write this endpoint must not offer.
+            return $this->asJson(['ok' => false]);
+        }
+
+        if ($plugin->notifications->getById($notificationId) === null) {
+            return $this->asJson(['ok' => false]);
+        }
+
+        $channel = isset($body['channel']) && is_string($body['channel']) ? $body['channel'] : null;
+
+        $plugin->analytics->recordOnce($type, $notificationId, $variantId, $subscriberId, $channel);
 
         return $this->asJson(['ok' => true]);
     }
 
     /**
-     * Where to send somebody when the destination is missing or not ours.
+     * Whether a link that does not verify may still be followed.
      *
-     * A notification whose URL was never set, or was set to another origin and has since been
-     * tampered with, lands on the site's home page rather than 404ing — arriving somewhere sensible
-     * beats an error page for a reader who did nothing wrong.
+     * Only for a notification that has actually gone out: then the link is plausibly one somebody was
+     * sent before a key rotation, and the destination is already public.
+     */
+    private function mayRedirectUnsigned(int $notificationId): bool
+    {
+        if ($notificationId <= 0) {
+            return false;
+        }
+
+        $notification = Plugin::getInstance()->notifications->getById($notificationId);
+
+        if ($notification === null) {
+            return false;
+        }
+
+        return $notification->dateLastSent !== null
+            || $notification->delivered > 0
+            || in_array($notification->state, [Notification::STATE_SENDING, Notification::STATE_SENT], true);
+    }
+
+    /**
+     * Where to send somebody when the destination is missing or unusable.
+     *
+     * A notification whose URL was never set lands on the site's home page rather than 404ing —
+     * arriving somewhere sensible beats an error page for a reader who did nothing wrong.
      */
     private function safeDestination(?string $destination): string
     {
         $destination = trim((string)$destination);
 
-        if ($destination === '') {
+        // Absolute URLs to other hosts are allowed — a notification legitimately links to a partner's
+        // announcement — but only ones an author actually stored, which is why this is checked here
+        // and not against a request parameter. The scheme is checked again on the way out: a
+        // `javascript:` destination stored before validation existed must not become a redirect.
+        if (!Analytics::isSafeDestination($destination)) {
             return UrlHelper::siteUrl('/');
         }
 
-        // Absolute URLs to other hosts are allowed — a notification legitimately links to a partner's
-        // announcement — but only ones an author actually stored, which is why this is checked here
-        // and not against a request parameter.
         return $destination;
     }
 

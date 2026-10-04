@@ -5,8 +5,13 @@ declare(strict_types=1);
 namespace justinholtweb\schedulr\controllers;
 
 use Craft;
+use craft\helpers\UrlHelper;
 use craft\web\Controller;
+use craft\web\View;
 use justinholtweb\schedulr\Plugin;
+use justinholtweb\schedulr\services\Analytics;
+use justinholtweb\schedulr\services\Subscribers;
+use yii\web\BadRequestHttpException;
 use yii\web\Response;
 
 /**
@@ -20,10 +25,16 @@ use yii\web\Response;
  *   session and therefore no token — and because injecting a per-session token into every HTML
  *   response poisons every full-page cache in front of the site.
  *
- * What replaces CSRF is that none of these endpoints can do anything harmful. The worst a forged
- * request achieves is recording a visit that did not happen or unsubscribing a browser whose endpoint
- * the attacker already knows — and knowing the endpoint means being able to unsubscribe it directly
- * with the push service anyway.
+ * What replaces CSRF is that none of these endpoints can do anything harmful, plus two cheap guards:
+ * the runtime endpoints only answer requests a cross-site page cannot forge without a preflight
+ * (`Subscribers::isRuntimeRequest()`), and every one that can create a row is rate-limited per IP.
+ * The worst a forged request achieves is recording a visit that did not happen or unsubscribing a
+ * browser whose endpoint the attacker already knows — and knowing the endpoint means being able to
+ * unsubscribe it directly with the push service anyway.
+ *
+ * The email unsubscribe is the exception that carries its own authentication — a signed token — and
+ * so is exempt from the runtime check: a mail provider's RFC 8058 one-click POST comes from its own
+ * servers as a form post.
  */
 class SubscribeController extends Controller
 {
@@ -40,12 +51,18 @@ class SubscribeController extends Controller
     public function actionHeartbeat(): Response
     {
         $this->requirePostRequest();
+        $this->requireRuntimeRequest();
+
+        $plugin = Plugin::getInstance();
+
+        if (!$plugin->subscribers->throttle('heartbeat', Subscribers::RATE_HEARTBEAT)) {
+            return $this->tooManyRequests();
+        }
 
         // Deliberately **not** `requireAcceptsJson()`. This endpoint answers JSON whatever the request
         // asked for, so requiring the header buys nothing and costs everything: a client that omits it
         // gets a 400, and the runtime is then silently dead on every page of the site while the same
         // request from curl works perfectly.
-        $plugin = Plugin::getInstance();
         $body = $this->body();
 
         $visitorId = (string)($body['visitorId'] ?? '');
@@ -56,10 +73,13 @@ class SubscribeController extends Controller
             $siteId,
             $this->cleanTimezone($body['timezone'] ?? null),
             isset($body['language']) ? (string)$body['language'] : null,
+            // A fresh UUID per request is a new row per request. Returning visitors never reach this,
+            // so the budget is spent only on rows that would be created.
+            static fn() => $plugin->subscribers->throttle('visitor', Subscribers::RATE_NEW_VISITOR),
         );
 
         if ($subscriber === null) {
-            // A malformed visitor ID. Answering 200 with nothing useful rather than an error, because
+            // A malformed visitor ID, or a new one over the creation limit. Answering 200 with nothing useful rather than an error, because
             // the runtime's correct response is to carry on and try again next page — and a 400 in
             // the console on every page load is a support ticket.
             return $this->asJson(['ok' => false]);
@@ -76,7 +96,11 @@ class SubscribeController extends Controller
             'mayPrompt' => $subscriber->dateDeclined === null || $this->reaskDue($subscriber->dateDeclined),
             // The server's word beats the browser's memory: a device retired as `410 gone` still holds
             // a local subscription object and would otherwise never re-subscribe.
-            'resubscribe' => !$subscriber->isPushable() && ($body['permission'] ?? null) === 'granted',
+            // Never for someone who unsubscribed from everything: the subscribe that followed could not
+            // make them pushable, and the runtime would then re-subscribe on every page load forever.
+            'resubscribe' => !$subscriber->unsubscribed
+                && !$subscriber->isPushable()
+                && ($body['permission'] ?? null) === 'granted',
             'inbox' => $plugin->getSettings()->onSiteRender
                 ? $plugin->deliveries->inboxFor($subscriber->id)
                 : [],
@@ -89,6 +113,11 @@ class SubscribeController extends Controller
     public function actionSubscribe(): Response
     {
         $this->requirePostRequest();
+        $this->requireRuntimeRequest();
+
+        if (!Plugin::getInstance()->subscribers->throttle('subscribe', Subscribers::RATE_SUBSCRIBE)) {
+            return $this->tooManyRequests();
+        }
 
         $body = $this->body();
         $subscription = $body['subscription'] ?? null;
@@ -108,7 +137,7 @@ class SubscribeController extends Controller
 
         if ($visitorId === '' && $previous !== '') {
             $existing = $plugin->subscribers->getByEndpointHash(hash('sha256', $previous), $siteId);
-            $visitorId = $existing?->visitorId ?? '';
+            $visitorId = $existing->visitorId ?? '';
         }
 
         $subscriber = $plugin->subscribers->subscribe(
@@ -129,8 +158,12 @@ class SubscribeController extends Controller
     /**
      * Forgets a push subscription, or unsubscribes from everything.
      *
-     * Two shapes, because it answers both a JavaScript call and a click on a link in an email — and
-     * the link has to work with no JavaScript, no session and one GET.
+     * Two shapes, because it answers both a JavaScript call and a link in an email. The link has to
+     * work with no JavaScript and no session — but a GET on it only renders a confirmation with a
+     * one-button form, and the unsubscribe itself is a POST. Link scanners, corporate mail filters and
+     * "safe browsing" previews fetch every URL in a message; a GET that acted would unsubscribe people
+     * who never touched the link. Gmail and Outlook's one-click unsubscribe is an RFC 8058 POST
+     * (`List-Unsubscribe=One-Click`) to the same URL, which is the same POST branch.
      */
     public function actionUnsubscribe(): Response
     {
@@ -142,18 +175,29 @@ class SubscribeController extends Controller
         $token = $request->getParam('sr_u');
 
         if (is_string($token) && $token !== '') {
-            $id = Craft::$app->getSecurity()->validateData($token);
+            $id = $plugin->subscribers->subscriberIdFromUnsubscribeToken($token);
 
-            if ($id === false) {
-                throw new \yii\web\BadRequestHttpException('That unsubscribe link is not valid.');
+            if ($id === null) {
+                throw new BadRequestHttpException('That unsubscribe link is not valid.');
             }
 
-            $subscriber = $plugin->subscribers->getById((int)$id);
+            $variables = [
+                'siteName' => Craft::$app->getSites()->getCurrentSite()->getName(),
+                'token' => $token,
+                'actionUrl' => UrlHelper::siteUrl('schedulr/unsubscribe'),
+                'confirmed' => false,
+            ];
+
+            if (!$request->getIsPost()) {
+                return $this->renderTemplate('schedulr/_unsubscribed', $variables, View::TEMPLATE_MODE_CP);
+            }
+
+            $subscriber = $plugin->subscribers->getById($id);
 
             if ($subscriber !== null) {
                 $plugin->subscribers->unsubscribeAll($subscriber->id);
                 $plugin->analytics->record(
-                    \justinholtweb\schedulr\services\Analytics::EVENT_UNSUBSCRIBED,
+                    Analytics::EVENT_UNSUBSCRIBED,
                     null,
                     subscriberId: $subscriber->id,
                     channel: 'email',
@@ -164,12 +208,11 @@ class SubscribeController extends Controller
                 return $this->asJson(['ok' => true]);
             }
 
-            return $this->renderTemplate('schedulr/_unsubscribed', [
-                'siteName' => Craft::$app->getSites()->getCurrentSite()->getName(),
-            ], \craft\web\View::TEMPLATE_MODE_CP);
+            return $this->renderTemplate('schedulr/_unsubscribed', ['confirmed' => true] + $variables, View::TEMPLATE_MODE_CP);
         }
 
         $this->requirePostRequest();
+        $this->requireRuntimeRequest();
 
         $body = $this->body();
         $endpoint = trim((string)($body['endpoint'] ?? ''));
@@ -184,6 +227,27 @@ class SubscribeController extends Controller
     }
 
     // -------------------------------------------------------------------------- internals
+
+    /**
+     * Refuses a request a cross-site page could have forged. See `Subscribers::isRuntimeRequest()`.
+     *
+     * The runtime and the worker both send `Content-Type: application/json`, so this costs legitimate
+     * traffic nothing.
+     */
+    private function requireRuntimeRequest(): void
+    {
+        if (!Plugin::getInstance()->subscribers->isRuntimeRequest()) {
+            throw new BadRequestHttpException('Expected a JSON request from this site.');
+        }
+    }
+
+    private function tooManyRequests(): Response
+    {
+        $response = $this->asJson(['ok' => false, 'error' => 'Too many requests.']);
+        $response->setStatusCode(429);
+
+        return $response;
+    }
 
     /**
      * The request body.
@@ -244,5 +308,4 @@ class SubscribeController extends Controller
 
         return (int)$declined->diff(new \DateTime())->days >= $days;
     }
-
 }

@@ -1,55 +1,102 @@
 {% extends 'schedulr/settings/_layout' %}
 {% import '_includes/forms' as forms %}
 
+{#
+  The single most consequential screen in the plugin. A browser-level block is permanent and
+  unrecoverable (there is no API to ask again), so every default here errs towards asking later
+  rather than sooner.
+#}
 {% block pane %}
-    <p class="light">
-        {#
-          The single most consequential screen in the plugin. A browser-level block is permanent and
-          unrecoverable — there is no API to ask again — so every default here errs towards asking
-          later rather than sooner.
-        #}
+    <p class="light readable">
         {{ 'A visitor who blocks notifications blocks them permanently: there is no way to ask again, on any site, ever. Every default here is deliberately patient.'|t('schedulr') }}
     </p>
 
     {{ forms.selectField({
         label: 'Prompt style'|t('schedulr'),
+        id: 'promptStyle',
         name: 'settings[promptStyle]',
         options: promptStyles,
         value: settings.promptStyle,
+        warning: not isPro and promptStyles|filter(o => o.disabled ?? false)|length ? 'Some styles require Schedulr Pro.'|t('schedulr') : null,
+        errors: settings.getErrors('promptStyle'),
+        disabled: readOnly,
     }) }}
 
     {{ forms.textField({
         label: 'After this many page views'|t('schedulr'),
         instructions: 'Zero prompts on the first page, which is the most reliable way to be blocked.'|t('schedulr'),
+        id: 'promptAfterViews',
         name: 'settings[promptAfterViews]',
         value: settings.promptAfterViews,
         size: 5,
         type: 'number',
+        min: 0,
+        errors: settings.getErrors('promptAfterViews'),
+        disabled: readOnly,
     }) }}
 
     {{ forms.textField({
         label: 'And this many seconds on the page'|t('schedulr'),
+        id: 'promptAfterSeconds',
         name: 'settings[promptAfterSeconds]',
         value: settings.promptAfterSeconds,
         size: 5,
         type: 'number',
+        min: 0,
+        errors: settings.getErrors('promptAfterSeconds'),
+        disabled: readOnly,
     }) }}
 
     {{ forms.textField({
         label: 'Ask again after'|t('schedulr'),
-        instructions: 'Days. Zero means a “no” is final — which is the respectful setting and also the one that protects the site from a permanent block.'|t('schedulr'),
+        instructions: 'Days. Zero means a “no” is final, which is the respectful setting and also the one that protects the site from a permanent block.'|t('schedulr'),
+        id: 'promptReaskDays',
         name: 'settings[promptReaskDays]',
         value: settings.promptReaskDays,
         size: 5,
         type: 'number',
+        min: 0,
+        errors: settings.getErrors('promptReaskDays'),
+        disabled: readOnly,
     }) }}
 
     <hr>
 
-    {{ forms.textField({ label: 'Heading'|t('schedulr'), name: 'settings[promptHeading]', value: settings.promptHeading }) }}
-    {{ forms.textareaField({ label: 'Body'|t('schedulr'), name: 'settings[promptBody]', value: settings.promptBody, rows: 2 }) }}
-    {{ forms.textField({ label: 'Accept label'|t('schedulr'), name: 'settings[promptAccept]', value: settings.promptAccept }) }}
-    {{ forms.textField({ label: 'Decline label'|t('schedulr'), name: 'settings[promptDecline]', value: settings.promptDecline }) }}
+    <h2>{{ 'Wording'|t('schedulr') }}</h2>
+
+    {{ forms.textField({
+        label: 'Heading'|t('schedulr'),
+        id: 'promptHeading',
+        name: 'settings[promptHeading]',
+        value: settings.promptHeading,
+        errors: settings.getErrors('promptHeading'),
+        disabled: readOnly,
+    }) }}
+    {{ forms.textareaField({
+        label: 'Body'|t('schedulr'),
+        id: 'promptBody',
+        name: 'settings[promptBody]',
+        value: settings.promptBody,
+        rows: 2,
+        errors: settings.getErrors('promptBody'),
+        disabled: readOnly,
+    }) }}
+    {{ forms.textField({
+        label: 'Accept label'|t('schedulr'),
+        id: 'promptAccept',
+        name: 'settings[promptAccept]',
+        value: settings.promptAccept,
+        errors: settings.getErrors('promptAccept'),
+        disabled: readOnly,
+    }) }}
+    {{ forms.textField({
+        label: 'Decline label'|t('schedulr'),
+        id: 'promptDecline',
+        name: 'settings[promptDecline]',
+        value: settings.promptDecline,
+        errors: settings.getErrors('promptDecline'),
+        disabled: readOnly,
+    }) }}
 
     {% if settings.promptStyle == 'custom' %}
         <hr>

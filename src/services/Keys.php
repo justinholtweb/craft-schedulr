@@ -79,7 +79,7 @@ class Keys extends Component
             ->orderBy(['id' => SORT_ASC])
             ->one();
 
-        if ($row === false || $row === null) {
+        if ($row === false) {
             return $this->keys = $this->generate();
         }
 

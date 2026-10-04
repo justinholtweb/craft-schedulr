@@ -1,85 +1,131 @@
 {% extends 'schedulr/settings/_layout' %}
 {% import '_includes/forms' as forms %}
 
+{% set proWarning = not isPro ? 'Requires Schedulr Pro.'|t('schedulr') : null %}
+
 {% block pane %}
     {% include 'schedulr/_components/_runner-banner' %}
 
     {{ forms.selectField({
+        first: true,
         label: 'How due notifications get sent'|t('schedulr'),
-        instructions: 'Cron is the only mode that sends on time. The web fallback can only run when somebody visits, so a quiet site sends late — it exists because a great many sites have no cron, and a scheduler that simply fails on those has a decorative scheduling feature.'|t('schedulr'),
+        instructions: 'Cron is the only mode that sends on time. The web fallback can only run when somebody visits, so a quiet site sends late. It exists because a great many sites have no cron, and a scheduler that simply fails on those has a decorative scheduling feature.'|t('schedulr'),
+        id: 'runnerMode',
         name: 'settings[runnerMode]',
         options: runnerModes,
         value: settings.runnerMode,
+        errors: settings.getErrors('runnerMode'),
+        disabled: readOnly,
     }) }}
 
-    <div class="field">
-        <div class="heading"><label>{{ 'The cron job'|t('schedulr') }}</label></div>
-        <div class="input">
-            <code>* * * * * cd {{ alias('@root') }} && php craft schedulr/run --quiet</code>
-            <p class="light">
-                {{ 'Running it more often than the schedule needs is harmless — a mutex means a second pass finds the lock held and returns immediately.'|t('schedulr') }}
-            </p>
-        </div>
-    </div>
+    {{ forms.copytextField({
+        label: 'The cron job'|t('schedulr'),
+        instructions: 'Running it more often than the schedule needs is harmless: a mutex means a second pass finds the lock held and returns immediately.'|t('schedulr'),
+        id: 'cronLine',
+        value: '* * * * * cd ' ~ alias('@root') ~ ' && php craft schedulr/run --quiet',
+        class: 'code',
+    }) }}
 
     {{ forms.textField({
         label: 'Minimum seconds between web-fallback runs'|t('schedulr'),
+        id: 'runnerMinInterval',
         name: 'settings[runnerMinInterval]',
         value: settings.runnerMinInterval,
         size: 5,
         type: 'number',
+        min: 0,
+        errors: settings.getErrors('runnerMinInterval'),
+        disabled: readOnly,
     }) }}
 
     {{ forms.textField({
         label: 'Recipients per queue job'|t('schedulr'),
         instructions: 'Larger is fewer jobs and more memory each. A job that dies loses its place for this many people until it retries.'|t('schedulr'),
+        id: 'batchSize',
         name: 'settings[batchSize]',
         value: settings.batchSize,
         size: 5,
         type: 'number',
+        min: 0,
+        errors: settings.getErrors('batchSize'),
+        disabled: readOnly,
     }) }}
 
     {{ forms.textField({
         label: 'Materialise this many days of future sends'|t('schedulr'),
         instructions: 'Recurring schedules are expanded into real rows ahead of time, which is what lets the schedule screen list the next twelve sends instead of promising them.'|t('schedulr'),
+        id: 'expandHorizonDays',
         name: 'settings[expandHorizonDays]',
         value: settings.expandHorizonDays,
         size: 5,
         type: 'number',
+        min: 0,
+        errors: settings.getErrors('expandHorizonDays'),
+        disabled: readOnly,
     }) }}
 
     <hr>
 
-    <h2>{{ 'Frequency caps'|t('schedulr') }}{{ isPro ? '' : ' — ' ~ 'Pro'|t('schedulr') }}</h2>
+    <h2>{{ 'Frequency caps'|t('schedulr') }}</h2>
 
     {{ forms.textField({
         label: 'At most this many notifications per person'|t('schedulr'),
-        instructions: 'Zero is no cap. Capped people are excluded while the audience is resolved rather than skipped at send time — thousands of skipped ledger rows per send would bury the skips that mean something.'|t('schedulr'),
+        instructions: 'Zero is no cap. Capped people are excluded while the audience is resolved rather than skipped at send time, because thousands of skipped ledger rows per send would bury the skips that mean something.'|t('schedulr'),
+        id: 'frequencyCapCount',
         name: 'settings[frequencyCapCount]',
         value: settings.frequencyCapCount,
         size: 4,
         type: 'number',
-        disabled: not isPro,
+        min: 0,
+        warning: proWarning,
+        errors: settings.getErrors('frequencyCapCount'),
+        disabled: readOnly or not isPro,
     }) }}
 
     {{ forms.textField({
         label: 'Counted over this many days'|t('schedulr'),
+        id: 'frequencyCapDays',
         name: 'settings[frequencyCapDays]',
         value: settings.frequencyCapDays,
         size: 4,
         type: 'number',
-        disabled: not isPro,
+        min: 0,
+        warning: proWarning,
+        errors: settings.getErrors('frequencyCapDays'),
+        disabled: readOnly or not isPro,
     }) }}
+
+    <hr>
 
     <h2>{{ 'Quiet hours'|t('schedulr') }}</h2>
 
     <p class="light">
         {{ 'A send landing inside the window is moved to the end of it, never dropped. Dropping would mean a daily 07:00 notification silently never sending on a site whose quiet hours run to 08:00, with nothing anywhere to say so.'|t('schedulr') }}
-        {{ 'A window that wraps midnight — 22:00 to 07:00 — is the normal case and works.'|t('schedulr') }}
+        {{ 'A window that wraps midnight, such as 22:00 to 07:00, is the normal case and works.'|t('schedulr') }}
     </p>
 
-    <div class="flex">
-        <div>{{ forms.textField({ label: 'From'|t('schedulr'), name: 'settings[quietHoursStart]', value: settings.quietHoursStart, placeholder: '22:00', size: 6 }) }}</div>
-        <div>{{ forms.textField({ label: 'Until'|t('schedulr'), name: 'settings[quietHoursEnd]', value: settings.quietHoursEnd, placeholder: '07:00', size: 6 }) }}</div>
+    <div class="flex flex-nowrap">
+        {{ forms.textField({
+            label: 'From'|t('schedulr'),
+            instructions: '24-hour {format}.'|t('schedulr', { format: '`HH:MM`' }),
+            id: 'quietHoursStart',
+            name: 'settings[quietHoursStart]',
+            value: settings.quietHoursStart,
+            placeholder: '22:00',
+            size: 6,
+            errors: settings.getErrors('quietHoursStart'),
+            disabled: readOnly,
+        }) }}
+        {{ forms.textField({
+            label: 'Until'|t('schedulr'),
+            instructions: '24-hour {format}.'|t('schedulr', { format: '`HH:MM`' }),
+            id: 'quietHoursEnd',
+            name: 'settings[quietHoursEnd]',
+            value: settings.quietHoursEnd,
+            placeholder: '07:00',
+            size: 6,
+            errors: settings.getErrors('quietHoursEnd'),
+            disabled: readOnly,
+        }) }}
     </div>
 {% endblock %}

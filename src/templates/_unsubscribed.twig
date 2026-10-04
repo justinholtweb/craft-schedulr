@@ -4,14 +4,19 @@
   Rendered in CP template mode from the plugin's own directory so it works on a site whose templates
   know nothing about Schedulr — an unsubscribe link that 404s is worse than no link at all, and it is
   the one link a mail provider will test.
+
+  Two states. Arriving by GET (`confirmed` false) shows one button that POSTs back with the signed
+  token; nothing is changed until it is pressed, because mail scanners fetch every link in a message.
+  No CSRF field: the controller is CSRF-exempt and the signed token is the authentication.
 #}
+{% set confirmed = confirmed ?? true %}
 <!DOCTYPE html>
 <html lang="{{ craft.app.language }}">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="robots" content="noindex">
-    <title>{{ 'Unsubscribed'|t('schedulr') }}</title>
+    <title>{{ (confirmed ? 'Unsubscribed' : 'Unsubscribe')|t('schedulr') }}</title>
     <style>
         :root { color-scheme: light dark; }
         body {
@@ -23,12 +28,26 @@
         .box { max-width: 30rem; padding: 2rem; text-align: center; }
         h1 { font-size: 1.375rem; margin: 0 0 .5rem; }
         p { margin: 0; opacity: .75; }
+        form { margin: 1.5rem 0 0; }
+        button {
+            font: inherit; font-weight: 600; padding: .75rem 1.25rem; border: 0; border-radius: 6px;
+            background: #C7278C; color: #fff; cursor: pointer;
+        }
     </style>
 </head>
 <body>
     <div class="box">
-        <h1>{{ 'You’ve been unsubscribed'|t('schedulr') }}</h1>
-        <p>{{ 'You won’t receive any more notifications from {site}.'|t('schedulr', { site: siteName }) }}</p>
+        {% if confirmed %}
+            <h1>{{ 'You’ve been unsubscribed'|t('schedulr') }}</h1>
+            <p>{{ 'You won’t receive any more notifications from {site}.'|t('schedulr', { site: siteName }) }}</p>
+        {% else %}
+            <h1>{{ 'Unsubscribe from {site}?'|t('schedulr', { site: siteName }) }}</h1>
+            <p>{{ 'You’ll stop receiving notifications from {site} by email, push and on the site.'|t('schedulr', { site: siteName }) }}</p>
+            <form method="post" action="{{ actionUrl }}">
+                <input type="hidden" name="sr_u" value="{{ token }}">
+                <button type="submit">{{ 'Unsubscribe'|t('schedulr') }}</button>
+            </form>
+        {% endif %}
     </div>
 </body>
 </html>

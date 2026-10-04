@@ -1,106 +1,171 @@
 {% extends 'schedulr/_layouts/cp' %}
+{% import 'schedulr/_components/_macros' as ui %}
 
 {% set selectedSubnavItem = 'reports' %}
 
 {% block content %}
-    <div class="flex" style="gap: 32px; margin-bottom: 24px;">
-        {% for key, label in {
-            total: 'Known browsers'|t('schedulr'),
-            pushable: 'Push'|t('schedulr'),
-            emailable: 'Email'|t('schedulr'),
-        } %}
-            <div>
-                <div class="light smalltext">{{ label }}</div>
-                <div style="font-size: 22px;">{{ stats[key]|number_format }}</div>
-            </div>
-        {% endfor %}
-    </div>
+    {% include 'schedulr/_components/_stats' with {
+        stats: [
+            { label: 'Known browsers'|t('schedulr'), value: stats.total|number_format },
+            { label: 'Push'|t('schedulr'), value: stats.pushable|number_format },
+            { label: 'Email'|t('schedulr'), value: stats.emailable|number_format },
+        ],
+    } only %}
 
-    <div class="flex" style="margin-bottom: 16px;">
-        {% for option in [7, 30, 90, 365] %}
-            <a class="btn{{ days == option ? ' active' : '' }}" href="{{ url('schedulr/reports', { days: option }) }}">
-                {{ '{n} days'|t('schedulr', { n: option }) }}
-            </a>
-        {% endfor %}
+    <div class="flex schedulr-chart-head">
+        <h2>{{ 'Deliveries'|t('schedulr') }}</h2>
+        <div class="flex-grow"></div>
+        <nav class="btngroup" aria-label="{{ 'Date range'|t('schedulr') }}">
+            {% for option in [7, 30, 90, 365] %}
+                <a class="btn small{{ days == option ? ' active' : '' }}"
+                   href="{{ url('schedulr/reports', { days: option }) }}"
+                   {% if days == option %}aria-current="page"{% endif %}>
+                    {{ '{n} days'|t('schedulr', { n: option }) }}
+                </a>
+            {% endfor %}
+        </nav>
     </div>
 
     {% set max = 1 %}
+    {% set totalDelivered = 0 %}
+    {% set totalFailed = 0 %}
     {% for row in series %}
-        {% set max = max(max, row.delivered, row.failed) %}
+        {% set max = max(max, row.delivered + row.failed) %}
+        {% set totalDelivered = totalDelivered + row.delivered %}
+        {% set totalFailed = totalFailed + row.failed %}
     {% endfor %}
 
-    <div class="pane">
-        <h2>{{ 'Deliveries'|t('schedulr') }}</h2>
-
+    {% if series|length %}
         {#
-          A bar chart in plain HTML. No chart library, because pulling one in for two series would be
-          the largest thing this plugin ships, and it would still need a dark-mode pass. Bars are
-          measured against the window's own maximum, so a quiet fortnight is not flattened by one busy
-          day outside the range.
+          A stacked bar chart in plain HTML. No chart library, because pulling one in for two series
+          would be the largest thing this plugin ships. Colours are CP tokens, failures are hatched as
+          well as coloured so the two series differ by more than hue, and the same numbers are
+          available as a table below for anybody who cannot see the bars. Bars are measured against
+          the window's own maximum, so a quiet fortnight is not flattened by one busy day outside
+          the range.
         #}
-        <div style="display: flex; align-items: flex-end; gap: 2px; height: 140px; margin-top: 12px;">
+        <div class="schedulr-chart" role="img"
+             aria-label="{{ 'Deliveries per day from {start} to {end}: {delivered} delivered and {failed} failed in total.'|t('schedulr', {
+                 start: series|first.day,
+                 end: series|last.day,
+                 delivered: totalDelivered|number_format,
+                 failed: totalFailed|number_format,
+             }) }}">
             {% for row in series %}
-                <div style="flex: 1; display: flex; flex-direction: column; justify-content: flex-end; height: 100%;"
-                     title="{{ row.day }}: {{ row.delivered }} delivered, {{ row.failed }} failed">
+                <div class="schedulr-chart-col"
+                     title="{{ '{day}: {delivered} delivered, {failed} failed'|t('schedulr', { day: row.day, delivered: row.delivered, failed: row.failed }) }}">
                     {% if row.failed %}
-                        <div style="background: #CF1124; height: {{ (row.failed / max * 100)|round }}%; min-height: 2px;"></div>
+                        <div class="schedulr-bar schedulr-bar--failed" style="block-size: {{ (row.failed / max * 100)|round(1) }}%"></div>
                     {% endif %}
                     {% if row.delivered %}
-                        <div style="background: #C7278C; height: {{ (row.delivered / max * 100)|round }}%; min-height: 2px;"></div>
+                        <div class="schedulr-bar schedulr-bar--delivered" style="block-size: {{ (row.delivered / max * 100)|round(1) }}%"></div>
                     {% endif %}
                 </div>
             {% endfor %}
         </div>
 
-        <div class="flex light smalltext" style="justify-content: space-between; margin-top: 6px;">
+        <div class="flex light smalltext schedulr-chart-axis" aria-hidden="true">
             <span>{{ series|first.day }}</span>
             <span>{{ series|last.day }}</span>
         </div>
-    </div>
+
+        <ul class="schedulr-legend smalltext">
+            <li><span class="schedulr-swatch schedulr-bar--delivered" aria-hidden="true"></span>{{ 'Delivered'|t('schedulr') }} ({{ totalDelivered|number_format }})</li>
+            <li><span class="schedulr-swatch schedulr-bar--failed" aria-hidden="true"></span>{{ 'Failed'|t('schedulr') }} ({{ totalFailed|number_format }})</li>
+        </ul>
+
+        <details class="schedulr-chart-table">
+            <summary>{{ 'Show as a table'|t('schedulr') }}</summary>
+            <table class="data fullwidth">
+                <thead>
+                    <tr>
+                        <th scope="col">{{ 'Day'|t('schedulr') }}</th>
+                        <th scope="col">{{ 'Delivered'|t('schedulr') }}</th>
+                        <th scope="col">{{ 'Failed'|t('schedulr') }}</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in series %}
+                        <tr>
+                            <th scope="row">{{ row.day }}</th>
+                            <td>{{ row.delivered|number_format }}</td>
+                            <td>{{ row.failed|number_format }}</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </details>
+    {% else %}
+        <p class="zilch small">{{ 'Nothing has been sent in this period.'|t('schedulr') }}</p>
+    {% endif %}
+
+    <hr>
 
     {% if tracking %}
-        <div class="pane">
-            <h2>{{ 'Best performing'|t('schedulr') }}</h2>
+        <h2>{{ 'Best performing'|t('schedulr') }}</h2>
 
-            {% if leaderboard|length %}
-                <table class="data fullwidth">
-                    <thead>
+        {% if leaderboard|length %}
+            <table class="data fullwidth">
+                <thead>
+                    <tr>
+                        <th scope="col">{{ 'Notification'|t('schedulr') }}</th>
+                        <th scope="col">{{ 'Delivered'|t('schedulr') }}</th>
+                        <th scope="col">{{ 'Clicked'|t('schedulr') }}</th>
+                        <th scope="col">{{ 'Click rate'|t('schedulr') }}</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in leaderboard %}
                         <tr>
-                            <th>{{ 'Notification'|t('schedulr') }}</th>
-                            <th>{{ 'Delivered'|t('schedulr') }}</th>
-                            <th>{{ 'Clicked'|t('schedulr') }}</th>
-                            <th>{{ 'Click rate'|t('schedulr') }}</th>
+                            <td>
+                                <a href="{{ url('schedulr/notifications/' ~ row.id ~ '/deliveries') }}">
+                                    {{ row.notification.title ?? ('#' ~ row.id) }}
+                                </a>
+                            </td>
+                            <td>{{ row.delivered|number_format }}</td>
+                            <td>{{ row.clicked|number_format }}</td>
+                            <td>{{ row.clickRate is null ? ui.muted('Not enough data'|t('schedulr')) : row.clickRate ~ '%' }}</td>
                         </tr>
-                    </thead>
-                    <tbody>
-                        {% for row in leaderboard %}
-                            <tr>
-                                <td>
-                                    <a href="{{ url('schedulr/notifications/' ~ row.id ~ '/deliveries') }}">
-                                        {{ row.notification.title ?? ('#' ~ row.id) }}
-                                    </a>
-                                </td>
-                                <td>{{ row.delivered|number_format }}</td>
-                                <td>{{ row.clicked|number_format }}</td>
-                                <td>{{ row.clickRate is null ? '—' : row.clickRate ~ '%' }}</td>
-                            </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-                <p class="light smalltext">
-                    {{ 'Only notifications with at least 20 deliveries are ranked — a 25% click rate on four deliveries means nothing.'|t('schedulr') }}
-                </p>
-            {% else %}
-                <p class="light">{{ 'Nothing has enough deliveries to rank yet.'|t('schedulr') }}</p>
-            {% endif %}
-        </div>
+                    {% endfor %}
+                </tbody>
+            </table>
+            <p class="light smalltext">
+                {{ 'Only notifications with at least 20 deliveries are ranked. A 25% click rate on four deliveries means nothing.'|t('schedulr') }}
+            </p>
+        {% else %}
+            <p class="zilch small">{{ 'Nothing has enough deliveries to rank yet.'|t('schedulr') }}</p>
+        {% endif %}
     {% else %}
-        <div class="pane">
+        <blockquote class="note tip">
             <p>
                 <strong>{{ 'Click tracking needs Schedulr Pro.'|t('schedulr') }}</strong>
                 {# Said out loud so Lite does not merely look empty. #}
-                {{ 'Delivered and failed counts are recorded in every edition — the chart above is real. What Pro adds is what happened after the notification arrived.'|t('schedulr') }}
+                {{ 'Delivered and failed counts are recorded in every edition, so the chart above is real. What Pro adds is what happened after the notification arrived.'|t('schedulr') }}
             </p>
-        </div>
+        </blockquote>
     {% endif %}
+
+    {% css %}
+        .schedulr-chart-head { align-items: center; margin-block-end: var(--m); }
+        .schedulr-chart-head h2 { margin: 0; }
+        .schedulr-chart { display: flex; align-items: flex-end; gap: 2px; block-size: 140px; }
+        .schedulr-chart-col { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; block-size: 100%; }
+        .schedulr-bar { min-block-size: 2px; }
+        .schedulr-bar--delivered { background-color: var(--link-color); }
+        .schedulr-bar--failed {
+            background-color: var(--error-color);
+            background-image: repeating-linear-gradient(45deg, transparent 0 3px, rgb(255 255 255 / 45%) 3px 5px);
+        }
+        .schedulr-chart-axis { justify-content: space-between; margin-block-start: var(--xs); }
+        .schedulr-legend { display: flex; flex-wrap: wrap; gap: var(--s) var(--l); list-style: none; padding: 0; margin-block: var(--s) 0; }
+        .schedulr-legend li { display: flex; align-items: center; gap: var(--xs); }
+        .schedulr-swatch { display: inline-block; inline-size: 12px; block-size: 12px; border-radius: var(--radius-sm, 2px); }
+        .schedulr-chart-table { margin-block-start: var(--m); }
+        .schedulr-chart-table summary { cursor: pointer; color: var(--link-color); }
+        .schedulr-chart-table table { margin-block-start: var(--s); }
+        @media (forced-colors: active) {
+            .schedulr-bar--delivered, .schedulr-legend .schedulr-bar--delivered { background: CanvasText; }
+            .schedulr-bar--failed, .schedulr-legend .schedulr-bar--failed { background: GrayText; }
+        }
+    {% endcss %}
 {% endblock %}

@@ -3,44 +3,49 @@
 
 {% block pane %}
     {{ forms.lightswitchField({
+        first: true,
         label: 'Add Schedulr’s runtime to front-end pages'|t('schedulr'),
-        instructions: 'Off leaves every endpoint working for a site that would rather load the script from its own bundle — {code} renders it.'|t('schedulr', {
-            code: '<code>{{ craft.schedulr.runtime() }}</code>'
+        instructions: 'Off leaves every endpoint working for a site that would rather load the script from its own bundle. {code} renders it.'|t('schedulr', {
+            code: '`{{ craft.schedulr.runtime() }}`'
         }),
+        id: 'injectRuntime',
         name: 'settings[injectRuntime]',
         on: settings.injectRuntime,
+        errors: settings.getErrors('injectRuntime'),
+        disabled: readOnly,
     }) }}
 
     {{ forms.textareaField({
         label: 'Except on these URIs'|t('schedulr'),
-        instructions: 'One per line. {code} matches anything.'|t('schedulr', { code: '<code>*</code>' }),
+        instructions: 'One per line. {code} matches anything.'|t('schedulr', { code: '`*`' }),
+        id: 'excludedUris',
         name: 'settings[excludedUris]',
         value: settings.excludedUris|join("\n"),
         rows: 4,
+        class: 'code',
+        errors: settings.getErrors('excludedUris'),
+        disabled: readOnly,
     }) }}
 
     {{ forms.colorField({
         label: 'Accent colour'|t('schedulr'),
         instructions: 'Used by the opt-in prompt and the on-site banner. A site can override it from its own CSS with {code}.'|t('schedulr', {
-            code: '<code>--schedulr-accent</code>'
+            code: '`--schedulr-accent`'
         }),
+        id: 'accentColor',
         name: 'settings[accentColor]',
         value: settings.accentColor,
+        errors: settings.getErrors('accentColor'),
+        disabled: readOnly,
     }) }}
 
     <hr>
 
-    <div class="field">
-        <div class="heading"><label>{{ 'Edition'|t('schedulr') }}</label></div>
-        <div class="input">
-            <p>
-                {{ isPro ? 'Schedulr Pro'|t('schedulr') : 'Schedulr Lite'|t('schedulr') }}
-            </p>
-            {% if not isPro %}
-                <p class="light">
-                    {{ 'Lite composes, schedules and sends over all three channels. Pro adds segments, per-subscriber time zones, automations, A/B testing, click analytics and frequency caps.'|t('schedulr') }}
-                </p>
-            {% endif %}
-        </div>
-    </div>
+    <h2>{{ 'Edition'|t('schedulr') }}</h2>
+    <p>{{ isPro ? 'Schedulr Pro'|t('schedulr') : 'Schedulr Lite'|t('schedulr') }}</p>
+    {% if not isPro %}
+        <p class="light">
+            {{ 'Lite composes, schedules and sends over all three channels. Pro adds segments, per-subscriber time zones, automations, A/B testing, click analytics and frequency caps.'|t('schedulr') }}
+        </p>
+    {% endif %}
 {% endblock %}

@@ -26,10 +26,8 @@ use craft\elements\Entry;
 use craft\helpers\Db;
 use craft\helpers\Json;
 use craft\helpers\StringHelper;
-use justinholtweb\schedulr\channels\SendResult;
 use justinholtweb\schedulr\db\Table;
 use justinholtweb\schedulr\elements\Notification;
-use justinholtweb\schedulr\helpers\Recurrence;
 use justinholtweb\schedulr\models\Audience;
 use justinholtweb\schedulr\models\Delivery;
 use justinholtweb\schedulr\models\Edition;
@@ -82,6 +80,13 @@ function section(string $name): void
 $plugin = Plugin::getInstance();
 $db = Craft::$app->getDb();
 $siteId = Craft::$app->getSites()->getPrimarySite()->id;
+
+// Push endpoints must be on a known push service's host. The fixtures aim at `push.invalid`, which can
+// never resolve, so it is allowed here — **in memory only**, never saved — rather than pointing the
+// suite at a real push service.
+if (property_exists($plugin->getSettings(), 'extraPushHosts')) {
+    $plugin->getSettings()->extraPushHosts = array_merge((array)$plugin->getSettings()->extraPushHosts, ['push.invalid']);
+}
 
 /** The tag every fixture carries, so cleanup and isolation are one condition. */
 $RUN = 'schedulr-check-' . StringHelper::randomString(8);
@@ -1204,6 +1209,117 @@ check('expansion is idempotent', function() use ($plugin) {
     return $before === $after ? true : "$before became $after";
 });
 
+/** The calendar dates, in the site's zone, a notification's occurrences fall on. */
+function occurrenceDates(int $notificationId): array
+{
+    $zone = new DateTimeZone(Craft::$app->getTimeZone());
+    $dates = [];
+
+    foreach ((new Query())->select(['dueAt'])->from(Table::OCCURRENCES)
+        ->where(['notificationId' => $notificationId])->column() as $due) {
+        $dates[] = (new DateTime((string)$due, new DateTimeZone('UTC')))->setTimezone($zone)->format('Y-m-d');
+    }
+
+    sort($dates);
+
+    return $dates;
+}
+
+check('an every-other-week rule keeps the phase of its start date', function() use ($plugin) {
+    $zone = new DateTimeZone(Craft::$app->getTimeZone());
+    // Three weeks ago, so *this* week is an off week. A rule re-anchored at today would put its first
+    // send in it — the "every other week fires weekly" bug.
+    $start = new DateTime('today -21 days', $zone);
+    $weekday = (int)(new DateTime('today', $zone))->format('w');
+
+    $notification = makeNotification(
+        ['state' => Notification::STATE_SCHEDULED],
+        new Schedule([
+            'mode' => Schedule::MODE_RECURRING,
+            'frequency' => Schedule::FREQ_WEEKLY,
+            'interval' => 2,
+            'byWeekday' => [$weekday, ($weekday + 3) % 7],
+            'timeOfDay' => '09:00',
+            'startDate' => $start,
+        ]),
+    );
+
+    // A second pass, as the runner makes every minute.
+    $plugin->schedules->expandAll();
+
+    $dates = occurrenceDates($notification->id);
+    // Calendar arithmetic in UTC, where a day is always 24 hours.
+    $utc = new DateTimeZone('UTC');
+    $anchorWeek = (new DateTimeImmutable($start->format('Y-m-d'), $utc))->modify('-' . (int)$start->format('w') . ' days');
+
+    foreach ($dates as $date) {
+        $day = new DateTimeImmutable($date, $utc);
+        $weeks = intdiv((int)$anchorWeek->diff($day->modify('-' . (int)$day->format('w') . ' days'))->days, 7);
+
+        if ($weeks % 2 !== 0) {
+            return "$date is in an off week";
+        }
+    }
+
+    return $dates !== [] ? true : 'nothing was materialised';
+});
+
+check('a yearly rule materialises its own day, not today’s', function() use ($plugin) {
+    $zone = new DateTimeZone(Craft::$app->getTimeZone());
+    $day = new DateTime('today +20 days', $zone);
+    $start = (clone $day)->modify('-2 years');
+
+    $notification = makeNotification(
+        ['state' => Notification::STATE_SCHEDULED],
+        new Schedule([
+            'mode' => Schedule::MODE_RECURRING,
+            'frequency' => Schedule::FREQ_YEARLY,
+            'timeOfDay' => '12:00',
+            'startDate' => $start,
+        ]),
+    );
+
+    $plugin->schedules->expandAll();
+    $plugin->schedules->expandAll();
+
+    $dates = occurrenceDates($notification->id);
+
+    // One date per year, on the start date's month and day — however long the horizon is set to.
+    $sameDay = array_filter($dates, fn($date) => substr($date, 5) === $day->format('m-d'));
+
+    return $dates !== [] && $dates[0] === $day->format('Y-m-d') && count($sameDay) === count($dates)
+        && count($dates) === count(array_unique(array_map(fn($date) => substr($date, 0, 4), $dates)))
+        ? true
+        : 'materialised ' . Json::encode($dates);
+});
+
+check('maxOccurrences counts from the start date, across passes', function() use ($plugin) {
+    $zone = new DateTimeZone(Craft::$app->getTimeZone());
+
+    // Five sends from two days ago: two have already happened (or been missed), so at most three are
+    // left. A count restarting at today on every pass would materialise five, then more every day.
+    $notification = makeNotification(
+        ['state' => Notification::STATE_SCHEDULED],
+        new Schedule([
+            'mode' => Schedule::MODE_RECURRING,
+            'frequency' => Schedule::FREQ_DAILY,
+            'timeOfDay' => '12:00',
+            'startDate' => new DateTime('today -2 days', $zone),
+            'maxOccurrences' => 5,
+        ]),
+    );
+
+    $plugin->schedules->expandAll();
+    $plugin->schedules->expandAll();
+
+    $dates = occurrenceDates($notification->id);
+    $last = (new DateTime('today +2 days', $zone))->format('Y-m-d');
+
+    return count($dates) >= 2 && count($dates) <= 3 && end($dates) === $last
+        ? true
+        : 'materialised ' . Json::encode($dates);
+});
+
 check('an immediate occurrence is created already claimed', function() use ($plugin) {
     $notification = makeNotification();
     $occurrence = $plugin->schedules->createImmediateOccurrence($notification);
@@ -1258,6 +1374,65 @@ check('a stalled claim is returned to pending', function() use ($plugin, $db) {
     return $reclaimed >= 1;
 });
 
+check('a stalled send is never returned to pending while its batches may still run', function() use ($plugin, $db) {
+    $notification = makeNotification(['state' => Notification::STATE_SENDING]);
+    $twoHoursAgo = (new DateTime('-2 hours', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
+
+    $db->createCommand()->insert(Table::OCCURRENCES, [
+        'notificationId' => $notification->id,
+        'dueAt' => $twoHoursAgo,
+        'status' => Occurrence::STATUS_SENDING,
+        'claimedAt' => $twoHoursAgo,
+        'claimToken' => StringHelper::UUID(),
+        'targeted' => 1000,
+        'processed' => 200,
+        'delivered' => 200,
+        'dateCreated' => $twoHoursAgo,
+        'dateUpdated' => $twoHoursAgo,
+        'uid' => StringHelper::UUID(),
+    ])->execute();
+    $id = (int)$db->getLastInsertID();
+
+    $plugin->schedules->reclaimStalled(30);
+
+    // Returned to pending, the runner would dispatch the whole audience again while the eight remaining
+    // batches were still sitting in the queue — and everybody in the first two would get it twice.
+    $status = (new Query())->select(['status'])->from(Table::OCCURRENCES)->where(['id' => $id])->scalar();
+
+    return $status === Occurrence::STATUS_SENDING ? true : "became $status";
+});
+
+check('a send abandoned for a day is closed from its own totals, not re-sent', function() use ($plugin, $db) {
+    $notification = makeNotification(['state' => Notification::STATE_SENDING]);
+    $twoDaysAgo = (new DateTime('-2 days', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
+
+    $db->createCommand()->insert(Table::OCCURRENCES, [
+        'notificationId' => $notification->id,
+        'dueAt' => $twoDaysAgo,
+        'status' => Occurrence::STATUS_SENDING,
+        'claimedAt' => $twoDaysAgo,
+        'claimToken' => StringHelper::UUID(),
+        'targeted' => 10,
+        'processed' => 6,
+        'delivered' => 6,
+        'dateCreated' => $twoDaysAgo,
+        'dateUpdated' => $twoDaysAgo,
+        'uid' => StringHelper::UUID(),
+    ])->execute();
+    $id = (int)$db->getLastInsertID();
+
+    $plugin->schedules->reclaimStalled(30);
+
+    $status = (new Query())->select(['status'])->from(Table::OCCURRENCES)->where(['id' => $id])->scalar();
+    $state = (new Query())->select(['status'])->from(Table::NOTIFICATIONS)->where(['id' => $notification->id])->scalar();
+
+    // Closed, and the notification leaves `sending` with it — or an automation's in-flight guard would
+    // stay shut for ever.
+    return $status === Occurrence::STATUS_SENT && $state === Notification::STATE_SENT
+        ? true
+        : "occurrence $status, notification $state";
+});
+
 check('completeBatch reports incomplete until every recipient is accounted for', function() use ($plugin, $db) {
     $notification = makeNotification();
     $occurrence = $plugin->schedules->createImmediateOccurrence($notification);
@@ -1269,14 +1444,94 @@ check('completeBatch reports incomplete until every recipient is accounted for',
 
     // Batches complete out of order and one can be retried, so "was this the last batch number" is not a
     // question with a reliable answer.
-    return $partial === false && $rest === true;
+    return $partial === null && is_array($rest);
 });
 
 check('completeBatch never reports complete when nothing was targeted', function() use ($plugin) {
     $notification = makeNotification();
     $occurrence = $plugin->schedules->createImmediateOccurrence($notification);
 
-    return $plugin->schedules->completeBatch($occurrence->id, 0, 0, 0) === false;
+    return $plugin->schedules->completeBatch($occurrence->id, 0, 0, 0) === null;
+});
+
+check('completeBatch returns the accumulated totals, not the last batch’s', function() use ($plugin, $db) {
+    $notification = makeNotification();
+    $occurrence = $plugin->schedules->createImmediateOccurrence($notification);
+
+    $db->createCommand()->update(Table::OCCURRENCES, ['targeted' => 10], ['id' => $occurrence->id])->execute();
+
+    $plugin->schedules->completeBatch($occurrence->id, 7, 7, 0);
+    $totals = $plugin->schedules->completeBatch($occurrence->id, 3, 0, 3);
+    $row = $plugin->schedules->getOccurrenceById($occurrence->id);
+
+    // The last batch delivered nothing; the send delivered seven. It is a sent occurrence.
+    return $totals !== null
+        && $totals['delivered'] === 7
+        && $totals['failed'] === 3
+        && $row?->status === Occurrence::STATUS_SENT
+        ? true
+        : 'totals ' . Json::encode($totals) . ', status ' . ($row?->status ?? 'missing');
+});
+
+check('only one batch closes a send, however many finish together', function() use ($plugin, $db) {
+    $notification = makeNotification();
+    $occurrence = $plugin->schedules->createImmediateOccurrence($notification);
+
+    $db->createCommand()->update(Table::OCCURRENCES, ['targeted' => 2], ['id' => $occurrence->id])->execute();
+
+    // Both "batches" have incremented before either asks whether the send is complete — the interleaving
+    // that let two workers both read processed >= targeted and both close the send.
+    $db->createCommand()->update(Table::OCCURRENCES, ['processed' => 2, 'delivered' => 2], ['id' => $occurrence->id])->execute();
+
+    $first = $plugin->schedules->completeBatch($occurrence->id, 0, 0, 0);
+    $second = $plugin->schedules->completeBatch($occurrence->id, 0, 0, 0);
+
+    return is_array($first) && $second === null;
+});
+
+check('a send whose last batch failed is still sent when earlier batches delivered', function() use ($plugin, $db) {
+    $reached = [makeSubscriber(), makeSubscriber()];
+
+    $notification = makeNotification(['channels' => ['onsite'], 'state' => Notification::STATE_SCHEDULED]);
+    $occurrence = $plugin->schedules->createImmediateOccurrence($notification);
+    $plugin->schedules->markOccurrence($occurrence->id, Occurrence::STATUS_SENDING);
+    $plugin->schedules->setOccurrenceCounts($occurrence->id, targeted: 3);
+
+    $queue = Craft::$app->getQueue();
+
+    // Batch one reaches two people. Batch two names a subscriber who has since been forgotten, so it
+    // delivers nothing — and it is the batch that finishes the send.
+    (new \justinholtweb\schedulr\queue\jobs\SendBatch([
+        'occurrenceId' => $occurrence->id,
+        'notificationId' => $notification->id,
+        'subscriberIds' => array_map(fn($s) => $s->id, $reached),
+        'batchNumber' => 1,
+        'batchCount' => 2,
+    ]))->execute($queue);
+
+    (new \justinholtweb\schedulr\queue\jobs\SendBatch([
+        'occurrenceId' => $occurrence->id,
+        'notificationId' => $notification->id,
+        'subscriberIds' => [2147480000],
+        'batchNumber' => 2,
+        'batchCount' => 2,
+    ]))->execute($queue);
+
+    $row = $plugin->schedules->getOccurrenceById($occurrence->id);
+    $state = (new Query())->select(['status'])->from(Table::NOTIFICATIONS)->where(['id' => $notification->id])->scalar();
+
+    return $row?->status === Occurrence::STATUS_SENT && $state === Notification::STATE_SENT
+        ? true
+        : 'occurrence ' . ($row?->status ?? 'missing') . ', notification ' . $state;
+});
+
+check('a send batch allows every recipient its full request timeout', function() {
+    $job = new \justinholtweb\schedulr\queue\jobs\SendBatch(['subscriberIds' => range(1, 1000)]);
+    $small = new \justinholtweb\schedulr\queue\jobs\SendBatch(['subscriberIds' => [1]]);
+
+    // A TTR shorter than the batch's worst case is a re-send, not a timeout.
+    return $job->getTtr() >= 1000 * \justinholtweb\schedulr\queue\jobs\SendBatch::REQUEST_TIMEOUT
+        && $small->getTtr() >= 300;
 });
 
 check('pending occurrences can be cancelled', function() use ($plugin) {
@@ -2569,6 +2824,113 @@ check('a schedule downgrades its time zone mode rather than refusing to save', f
     return Edition::allowsPerSubscriberTimezone($plugin->isPro())
         ? $saved->timezoneMode === Schedule::TZ_SUBSCRIBER
         : $saved->timezoneMode === Schedule::TZ_SITE;
+});
+
+/**
+ * Runs a check as a given edition, **in memory only** — never persisted — and always restores it.
+ */
+function asEdition(string $edition, callable $test): mixed
+{
+    global $plugin;
+
+    $was = $plugin->edition;
+    $plugin->edition = $edition;
+
+    try {
+        return $test();
+    } finally {
+        $plugin->edition = $was;
+    }
+}
+
+check('a lapsed licence keeps applying a saved audience', function() use ($plugin) {
+    $frequent = makeSubscriber(['visits' => 40]);
+    $once = makeSubscriber(['visits' => 1]);
+
+    $audience = makeAudience([['type' => 'visits', 'operator' => 'gte', 'value' => 20]]);
+    $notification = makeNotification(['channels' => ['onsite'], 'audienceId' => $audience->id]);
+
+    // The worst bug a downgrade could have: Lite used to skip the condition, so "lapsed readers in
+    // Germany" became everybody the day a licence lapsed.
+    $ids = asEdition('lite', fn() => $plugin->sender->resolveAudience($notification));
+
+    return in_array($frequent->id, $ids, true) && !in_array($once->id, $ids, true)
+        ? true
+        : 'the audience was not applied on Lite';
+});
+
+check('a lapsed licence keeps a schedule’s per-subscriber time zone on re-save', function() use ($plugin) {
+    $notification = asEdition('pro', fn() => makeNotification(
+        ['state' => Notification::STATE_SCHEDULED],
+        new Schedule([
+            'mode' => Schedule::MODE_AT,
+            'sendAt' => new DateTime('+2 days 09:00'),
+            'timezoneMode' => Schedule::TZ_SUBSCRIBER,
+        ]),
+    ));
+
+    $schedule = $plugin->schedules->getForNotification($notification->id);
+    asEdition('lite', fn() => $plugin->schedules->save($schedule));
+
+    $kept = $plugin->schedules->getForNotification($notification->id)?->timezoneMode;
+
+    // …while a schedule that was *not* per-subscriber cannot be switched to it on Lite.
+    $fresh = asEdition('lite', fn() => makeNotification(
+        ['state' => Notification::STATE_SCHEDULED],
+        new Schedule([
+            'mode' => Schedule::MODE_AT,
+            'sendAt' => new DateTime('+2 days 09:00'),
+            'timezoneMode' => Schedule::TZ_SUBSCRIBER,
+        ]),
+    ));
+
+    $downgraded = $plugin->schedules->getForNotification($fresh->id)?->timezoneMode;
+
+    return $kept === Schedule::TZ_SUBSCRIBER && $downgraded === Schedule::TZ_SITE
+        ? true
+        : "kept $kept, fresh $downgraded";
+});
+
+check('a lapsed licence keeps running a saved automation', function() use ($plugin, &$createdNotificationIds) {
+    makeSubscriber(['dateLastSeen' => Db::prepareDateForDb(new DateTime('-700 days'))]);
+
+    $template = makeNotification([
+        'channels' => ['onsite'],
+        'triggerType' => Automations::TRIGGER_INACTIVITY,
+        'triggerConfig' => ['days' => 600],
+        'state' => Notification::STATE_SCHEDULED,
+    ], new Schedule(['mode' => Schedule::MODE_TRIGGER]));
+
+    asEdition('lite', fn() => $plugin->automations->sweep());
+
+    $raised = (new Query())->select(['id'])->from(Table::NOTIFICATIONS)->where(['templateId' => $template->id])->column();
+
+    foreach ($raised as $id) {
+        $createdNotificationIds[] = (int)$id;
+    }
+
+    return count($raised) === 1 ? true : count($raised) . ' raised on Lite';
+});
+
+check('an automation whose schedule is not live never fires', function() use ($plugin, &$createdNotificationIds) {
+    makeSubscriber(['dateLastSeen' => Db::prepareDateForDb(new DateTime('-700 days'))]);
+
+    $template = makeNotification([
+        'channels' => ['onsite'],
+        'triggerType' => Automations::TRIGGER_INACTIVITY,
+        'triggerConfig' => ['days' => 600],
+        'state' => Notification::STATE_DRAFT,
+    ], new Schedule(['mode' => Schedule::MODE_TRIGGER]));
+
+    $plugin->automations->sweep();
+
+    $raised = (new Query())->select(['id'])->from(Table::NOTIFICATIONS)->where(['templateId' => $template->id])->column();
+
+    foreach ($raised as $id) {
+        $createdNotificationIds[] = (int)$id;
+    }
+
+    return $raised === [] ? true : count($raised) . ' raised from a draft template';
 });
 
 // ---------------------------------------------------------------------------------- settings

@@ -10,23 +10,26 @@
 
 {% block content %}
     {% if not isPro %}
-        <div class="warning with-icon" style="margin-bottom: 24px;">
+        <blockquote class="note warning schedulr-banner">
             <p>
                 <strong>{{ 'Audiences need Schedulr Pro.'|t('schedulr') }}</strong>
                 {# Stated so nobody discovers it by a campaign silently reaching nobody. #}
-                {{ 'Any audiences already saved keep working and keep being sent to — Lite only stops new ones being created.'|t('schedulr') }}
+                {{ 'Any audiences already saved keep working and keep being sent to. Lite only stops new ones being created.'|t('schedulr') }}
             </p>
-        </div>
+        </blockquote>
+        {% css %}
+            .schedulr-banner { margin-block: 0 var(--xl); }
+        {% endcss %}
     {% endif %}
 
     {% if audiences|length %}
         <table class="data fullwidth">
             <thead>
                 <tr>
-                    <th>{{ 'Name'|t('app') }}</th>
-                    <th>{{ 'Handle'|t('app') }}</th>
-                    <th>{{ 'Rules'|t('schedulr') }}</th>
-                    <th>{{ 'Size'|t('schedulr') }}</th>
+                    <th scope="col">{{ 'Name'|t('app') }}</th>
+                    <th scope="col">{{ 'Handle'|t('app') }}</th>
+                    <th scope="col">{{ 'Rules'|t('schedulr') }}</th>
+                    <th scope="col">{{ 'Size'|t('schedulr') }}</th>
                 </tr>
             </thead>
             <tbody>
@@ -43,8 +46,8 @@
             </tbody>
         </table>
     {% else %}
-        <p class="light">
-            {{ 'No audiences yet. Without one, a notification goes to everybody reachable on its channels — which is often exactly right.'|t('schedulr') }}
+        <p class="zilch small">
+            {{ 'No audiences yet. Without one, a notification goes to everybody reachable on its channels, which is often exactly right.'|t('schedulr') }}
         </p>
     {% endif %}
 {% endblock %}

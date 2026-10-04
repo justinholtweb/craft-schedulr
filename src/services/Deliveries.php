@@ -26,6 +26,9 @@ use justinholtweb\schedulr\models\Delivery;
  */
 class Deliveries extends Component
 {
+    /** Rows per `DELETE` when pruning. */
+    public const PRUNE_CHUNK = 1000;
+
     /**
      * @param array<string, mixed> $criteria
      * @return array<int, array<string, mixed>>
@@ -214,7 +217,10 @@ class Deliveries extends Component
         return $out;
     }
 
-    public function prune(int $days): int
+    /**
+     * Deletes ledger rows older than `$days`, a chunk at a time.
+     */
+    public function prune(int $days, int $chunkSize = self::PRUNE_CHUNK): int
     {
         if ($days <= 0) {
             return 0;
@@ -222,9 +228,53 @@ class Deliveries extends Component
 
         $cutoff = Db::prepareDateForDb((new DateTime())->modify("-{$days} days"));
 
-        return Craft::$app->getDb()->createCommand()
-            ->delete(Table::DELIVERIES, ['<', 'dateCreated', $cutoff])
-            ->execute();
+        return self::deleteInChunks(Table::DELIVERIES, ['<', 'dateCreated', $cutoff], $chunkSize);
+    }
+
+    /**
+     * Deletes every row matching `$condition`, by primary key, `$chunkSize` rows per statement.
+     *
+     * One unbounded `DELETE … WHERE dateCreated < ?` over a year of a busy site's ledger is millions of
+     * rows in a single transaction: it holds locks on the very table every running send is inserting
+     * into, swells the undo log, and on a host with a statement timeout is killed partway and rolled
+     * back — so it deletes nothing, every night, while looking like it ran. Selecting a chunk of ids
+     * and deleting exactly those keeps each statement short, lets sends interleave, and makes a run
+     * that is interrupted keep the progress it made.
+     *
+     * Public and static so the queue job can prune the other tables the same way.
+     *
+     * @param array<int|string, mixed> $condition
+     */
+    public static function deleteInChunks(string $table, array $condition, int $chunkSize = self::PRUNE_CHUNK): int
+    {
+        $chunkSize = max(1, $chunkSize);
+        $db = Craft::$app->getDb();
+        $deleted = 0;
+
+        // A guard against a condition that somehow keeps matching rows it cannot delete: the loop
+        // stops when a chunk deletes nothing, and in any case after this many statements.
+        for ($i = 0; $i < 100000; $i++) {
+            $ids = (new Query())
+                ->select(['id'])
+                ->from($table)
+                ->where($condition)
+                ->orderBy(['id' => SORT_ASC])
+                ->limit($chunkSize)
+                ->column();
+
+            if ($ids === []) {
+                break;
+            }
+
+            $count = $db->createCommand()->delete($table, ['id' => $ids])->execute();
+            $deleted += $count;
+
+            if ($count === 0 || count($ids) < $chunkSize) {
+                break;
+            }
+        }
+
+        return $deleted;
     }
 
     /**

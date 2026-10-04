@@ -11,22 +11,18 @@ use craft\helpers\Db;
 use craft\helpers\Queue;
 use craft\helpers\StringHelper;
 use DateTime;
-use DateTimeZone;
 use justinholtweb\schedulr\channels\ChannelInterface;
 use justinholtweb\schedulr\channels\EmailChannel;
 use justinholtweb\schedulr\channels\OnSiteChannel;
 use justinholtweb\schedulr\channels\PushChannel;
-use justinholtweb\schedulr\channels\SendResult;
 use justinholtweb\schedulr\db\Table;
 use justinholtweb\schedulr\elements\Notification;
 use justinholtweb\schedulr\models\Delivery;
-use justinholtweb\schedulr\models\Edition;
 use justinholtweb\schedulr\models\Occurrence;
 use justinholtweb\schedulr\models\Settings;
 use justinholtweb\schedulr\models\Subscriber;
 use justinholtweb\schedulr\models\Variant;
 use justinholtweb\schedulr\Plugin;
-use justinholtweb\schedulr\services\Subscribers;
 use justinholtweb\schedulr\queue\jobs\SendBatch;
 use Throwable;
 
@@ -167,7 +163,6 @@ class Sender extends Component
     public function resolveAudience(Notification $notification, ?Occurrence $occurrence = null): array
     {
         $plugin = Plugin::getInstance();
-        $isPro = $plugin->isPro();
 
         $query = (new Query())
             ->select(['id'])
@@ -205,7 +200,11 @@ class Sender extends Component
 
         $query->andWhere($reach);
 
-        if ($notification->audienceId !== null && Edition::allowsSegments($isPro)) {
+        // Applied whatever the edition. Editions gate *choosing* a segment, in the editor; they never
+        // gate honouring one that is already saved. Skipping the condition on Lite turned "lapsed
+        // readers in Germany" into "everybody" on the day a licence lapsed, which is the single worst
+        // thing this plugin could do with a downgrade.
+        if ($notification->audienceId !== null) {
             $audience = $plugin->audiences->getById($notification->audienceId);
 
             if ($audience !== null) {
@@ -226,9 +225,9 @@ class Sender extends Component
             ]);
         }
 
-        if (Edition::allowsFrequencyCaps($isPro)) {
-            $this->applyFrequencyCaps($query);
-        }
+        // Configured caps apply whatever the edition, for the same reason the segment does: a lapsed
+        // licence must not turn "no more than three a week" into "as many as we send".
+        $this->applyFrequencyCaps($query);
 
         /** @var int[] $ids */
         $ids = array_map('intval', $query->column());
@@ -261,8 +260,8 @@ class Sender extends Component
     private function applyFrequencyCaps(Query $query): void
     {
         $settings = Plugin::getInstance()->getSettings();
-        $capPerDays = (int)($settings->frequencyCapDays ?? 0);
-        $capCount = (int)($settings->frequencyCapCount ?? 0);
+        $capPerDays = $settings->frequencyCapDays;
+        $capCount = $settings->frequencyCapCount;
 
         if ($capPerDays <= 0 || $capCount <= 0) {
             return;
@@ -350,9 +349,11 @@ class Sender extends Component
                     if ($handle === Notification::CHANNEL_PUSH) {
                         // `gone` retires the subscription immediately; `failed` only counts against
                         // it, because a push service having a bad afternoon is not a dead device.
-                        $failedIds[$subscriber->id] = $result->status === Delivery::STATUS_GONE
-                            ? 'gone'
-                            : $subscriber->failures;
+                        if ($result->status === Delivery::STATUS_GONE) {
+                            $failedIds[$subscriber->id] = 'gone';
+                        } elseif (self::countsAgainstDevice($result->statusCode)) {
+                            $failedIds[$subscriber->id] = $subscriber->failures;
+                        }
                     }
                 }
             }
@@ -422,6 +423,24 @@ class Sender extends Component
     }
 
     /**
+     * Whether a failed push says something about the *device*, and so should count towards
+     * `pushMaxFailures`.
+     *
+     * 401/403 mean this site's VAPID credentials are wrong, 413 means the message is too big, and
+     * 429/5xx mean the push service is busy. Every device fails identically on those, so counting
+     * them would let five sends with a bad keypair strip every subscriber's push subscription. A
+     * connection failure (no status code) and anything else in the 4xx range do count.
+     */
+    public static function countsAgainstDevice(?int $statusCode): bool
+    {
+        if ($statusCode === null) {
+            return true;
+        }
+
+        return !in_array($statusCode, [401, 403, 413, 429], true) && $statusCode < 500;
+    }
+
+    /**
      * @param array<int, true> $reached
      * @param array<int, int|string> $failed
      */
@@ -440,7 +459,7 @@ class Sender extends Component
             }
 
             if ($state === 'gone') {
-                $subscribers->unsubscribePush((string)($subscribers->getById((int)$id)?->endpoint ?? ''));
+                $subscribers->unsubscribePush((string)($subscribers->getById((int)$id)->endpoint ?? ''));
 
                 continue;
             }
@@ -456,10 +475,10 @@ class Sender extends Component
      */
     private function variantsFor(Notification $notification): array
     {
-        if (!Edition::allowsAbTesting(Plugin::getInstance()->isPro())) {
-            return [];
-        }
-
+        // Saved variants are honoured whatever the edition: Lite cannot *add* an arm (the editor and
+        // `Notifications::saveVariants()` see to that), but a test that was running when the licence
+        // lapsed keeps splitting its audience the way it was set up rather than silently collapsing
+        // into arm A halfway through.
         $variants = Plugin::getInstance()->notifications->getVariantModels($notification->id);
 
         // One variant is not a test — it is the notification, whose own fields are already being
@@ -504,12 +523,16 @@ class Sender extends Component
         return $variants[count($variants) - 1];
     }
 
+    /**
+     * The notification's saved dedupe policy, whatever the edition.
+     *
+     * Lite cannot *choose* a policy — the editor leaves a Lite notification on its default — but a
+     * policy chosen while the site was Pro keeps applying. Forcing `none` on downgrade would make every
+     * multi-channel notification notify everybody once per channel, which is exactly how a site loses
+     * its push permission.
+     */
     private function policyFor(Notification $notification): string
     {
-        if (!Edition::allowsDedupePolicy(Plugin::getInstance()->isPro())) {
-            return Settings::DEDUPE_NONE;
-        }
-
         return $notification->dedupePolicy;
     }
 }

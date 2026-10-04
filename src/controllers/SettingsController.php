@@ -28,7 +28,10 @@ class SettingsController extends Controller
     public function beforeAction($action): bool
     {
         $this->requireCpRequest();
-        $this->requireAdmin();
+
+        // Admin, but not "admin changes allowed": the panes stay viewable on an environment where
+        // `allowAdminChanges` is off and render read-only there. Each write re-checks strictly.
+        $this->requireAdmin(false);
 
         return parent::beforeAction($action);
     }
@@ -40,54 +43,43 @@ class SettingsController extends Controller
 
     public function actionGeneral(): Response
     {
-        return $this->pane('general', Craft::t('schedulr', 'General'));
+        return $this->pane('general');
     }
 
     public function actionPrompt(): Response
     {
-        return $this->pane('prompt', Craft::t('schedulr', 'Opt-in prompt'));
+        return $this->pane('prompt');
     }
 
     public function actionPush(): Response
     {
-        $plugin = Plugin::getInstance();
-
-        return $this->pane('push', Craft::t('schedulr', 'Web push'), [
-            'keySource' => $plugin->keys->getSource(),
-            'hasKeys' => $plugin->keys->hasKeys(),
-            'publicKey' => $plugin->keys->hasKeys() ? $plugin->keys->getPublicKey() : null,
-            'interop' => $plugin->interop->status(),
-            'workerUrl' => $plugin->serviceWorker->scriptUrl(),
-        ]);
+        return $this->pane('push');
     }
 
     public function actionEmail(): Response
     {
-        return $this->pane('email', Craft::t('schedulr', 'Email'));
+        return $this->pane('email');
     }
 
     public function actionOnSite(): Response
     {
-        return $this->pane('on-site', Craft::t('schedulr', 'On-site'));
+        return $this->pane('on-site');
     }
 
     public function actionDelivery(): Response
     {
-        return $this->pane('delivery', Craft::t('schedulr', 'Delivery'), [
-            'health' => Plugin::getInstance()->runner->health(),
-        ]);
+        return $this->pane('delivery');
     }
 
     public function actionPrivacy(): Response
     {
-        return $this->pane('privacy', Craft::t('schedulr', 'Privacy'), [
-            'stats' => Plugin::getInstance()->subscribers->stats(),
-        ]);
+        return $this->pane('privacy');
     }
 
     public function actionSave(): ?Response
     {
         $this->requirePostRequest();
+        $this->requireAdmin();
 
         $plugin = Plugin::getInstance();
         $settings = $plugin->getSettings();
@@ -102,7 +94,16 @@ class SettingsController extends Controller
         if (!Craft::$app->getPlugins()->savePluginSettings($plugin, $settings->toArray())) {
             Craft::$app->getSession()->setError(Craft::t('schedulr', 'Couldn’t save settings.'));
 
-            return null;
+            // Re-rendered with the same model, so the posted values survive and every field can show
+            // its own errors.
+            $pane = (string)Craft::$app->getRequest()->getBodyParam('pane', 'general');
+            $panes = self::panes();
+
+            if (!isset($panes[$pane])) {
+                $pane = 'general';
+            }
+
+            return $this->pane($pane, $settings);
         }
 
         Craft::$app->getSession()->setNotice(Craft::t('schedulr', 'Settings saved.'));
@@ -116,6 +117,7 @@ class SettingsController extends Controller
     public function actionRotateKeys(): Response
     {
         $this->requirePostRequest();
+        $this->requireAdmin();
 
         $plugin = Plugin::getInstance();
 
@@ -179,8 +181,8 @@ class SettingsController extends Controller
 
         if (!$result->isSuccess()) {
             return $this->asFailure(Craft::t('schedulr', 'The push service said: {error} ({code})', [
-                'error' => $result->error ?: 'no detail',
-                'code' => $result->statusCode ?? '—',
+                'error' => $result->error ?: Craft::t('schedulr', 'no detail'),
+                'code' => $result->statusCode ?? Craft::t('schedulr', 'no status'),
             ]));
         }
 
@@ -228,17 +230,53 @@ class SettingsController extends Controller
     // ---------------------------------------------------------------------------- internals
 
     /**
-     * @param array<string, mixed> $extra
+     * The seven panes, in sidebar order.
+     *
+     * @return array<string, string>
      */
-    private function pane(string $handle, string $label, array $extra = []): Response
+    private static function panes(): array
+    {
+        return [
+            'general' => Craft::t('schedulr', 'General'),
+            'prompt' => Craft::t('schedulr', 'Opt-in prompt'),
+            'push' => Craft::t('schedulr', 'Web push'),
+            'email' => Craft::t('schedulr', 'Email'),
+            'on-site' => Craft::t('schedulr', 'On-site'),
+            'delivery' => Craft::t('schedulr', 'Delivery'),
+            'privacy' => Craft::t('schedulr', 'Privacy'),
+        ];
+    }
+
+    /**
+     * Renders one pane. `$settings` is passed back in after a failed save, so the form keeps what was
+     * posted and every field can show its own errors.
+     */
+    private function pane(string $handle, ?Settings $settings = null): Response
     {
         $plugin = Plugin::getInstance();
+        $panes = self::panes();
+
+        $extra = match ($handle) {
+            'push' => [
+                'keySource' => $plugin->keys->getSource(),
+                'hasKeys' => $plugin->keys->hasKeys(),
+                'publicKey' => $plugin->keys->hasKeys() ? $plugin->keys->getPublicKey() : null,
+                'interop' => $plugin->interop->status(),
+                'workerUrl' => $plugin->serviceWorker->scriptUrl(),
+            ],
+            'delivery' => ['health' => $plugin->runner->health()],
+            'privacy' => ['stats' => $plugin->subscribers->stats()],
+            default => [],
+        };
 
         return $this->renderTemplate('schedulr/settings/_' . $handle, array_merge([
-            'title' => Craft::t('schedulr', 'Settings'),
+            // The pane's own name is the page title, so the header carries it once and the content
+            // does not repeat it as a second h1.
+            'title' => $panes[$handle] ?? Craft::t('schedulr', 'Settings'),
             'selectedPane' => $handle,
-            'paneLabel' => $label,
-            'settings' => $plugin->getSettings(),
+            'panes' => $panes,
+            'readOnly' => !Craft::$app->getConfig()->getGeneral()->allowAdminChanges,
+            'settings' => $settings ?? $plugin->getSettings(),
             'isPro' => $plugin->isPro(),
             'promptStyles' => $this->promptStyleOptions($plugin->isPro()),
             'runnerModes' => Settings::runnerModeOptions(),
@@ -259,7 +297,7 @@ class SettingsController extends Controller
 
             $out[] = [
                 'value' => $value,
-                'label' => $allowed ? $label : $label . ' — ' . Craft::t('schedulr', 'Pro'),
+                'label' => $allowed ? $label : Craft::t('schedulr', '{style} (requires Pro)', ['style' => $label]),
                 'disabled' => !$allowed,
             ];
         }

@@ -21,7 +21,7 @@ So a Schedulr notification is written **once** and delivered over whichever chan
 | | reaches | needs from the visitor |
 | --- | --- | --- |
 | **Web push** | the lock screen, with the browser closed | permission |
-| **Email** | anyone with an address, or signed in | an address |
+| **Email** | signed-in Craft users | to have signed in on that browser |
 | **On-site** | everybody who loads a page | nothing at all |
 
 The three do not share a recipient list, so Schedulr resolves the audience *per channel* and lets
@@ -74,8 +74,9 @@ drop it silently.
 
 Schedulr stores a random ID the browser generates, kept in `localStorage` rather than a cookie so
 that setting it cannot poison a full-page cache. Alongside it: the push endpoint and its keys when
-permission is granted, an email address if given, browser language and time zone, a coarse platform
-(no version), a visit count, and any tags you set.
+permission is granted, the Craft user ID when they are signed in (which is where an email address
+comes from), browser language and time zone, a coarse platform (no version), a visit count, and any
+tags you set.
 
 No page URLs, no dwell time, no cross-site identifiers, and nothing sent to any third party. Push
 payloads are encrypted end to end, so the push service relays a message it cannot read. The privacy

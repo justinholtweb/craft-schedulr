@@ -1,6 +1,6 @@
 {
     "name": "justinholtweb/craft-schedulr",
-    "description": "Scheduled notifications for Craft \u2014 web push, email and on-site, written once and delivered on a schedule, in a segment, or in each subscriber's own time zone.",
+    "description": "Scheduled notifications for Craft — web push, email and on-site, written once and delivered on a schedule, in a segment, or in each subscriber's own time zone.",
     "type": "craft-plugin",
     "version": "5.0.0",
     "keywords": [
@@ -17,7 +17,7 @@
         "onesignal"
     ],
     "license": "proprietary",
-    "minimum-stability": "dev",
+    "minimum-stability": "stable",
     "prefer-stable": true,
     "authors": [
         {
@@ -26,7 +26,8 @@
         }
     ],
     "support": {
-        "docs": "https://craft-schedulr.com/docs",
+        "email": "justin@justinholt.com",
+        "docs": "https://justinholt.com/plugins/craft-schedulr/docs",
         "source": "https://github.com/justinholtweb/craft-schedulr",
         "issues": "https://github.com/justinholtweb/craft-schedulr/issues"
     },
@@ -39,7 +40,8 @@
     "require-dev": {
         "craftcms/ecs": "dev-main",
         "craftcms/phpstan": "dev-main",
-        "phpunit/phpunit": "^10.5"
+        "phpunit/phpunit": "^10.5",
+        "phpstan/phpstan": "^1.12 || ^2.2"
     },
     "autoload": {
         "psr-4": {
@@ -52,7 +54,10 @@
         }
     },
     "scripts": {
-        "test": "phpunit"
+        "test": "phpunit",
+        "check-cs": "ecs check --ansi",
+        "fix-cs": "ecs check --fix --ansi",
+        "phpstan": "phpstan --memory-limit=1G"
     },
     "config": {
         "allow-plugins": {
@@ -66,7 +71,7 @@
         "handle": "schedulr",
         "developer": "Justin Holt",
         "developerUrl": "https://justinholt.com",
-        "documentationUrl": "https://craft-schedulr.com/docs",
+        "documentationUrl": "https://justinholt.com/plugins/craft-schedulr/docs",
         "changelogUrl": "https://raw.githubusercontent.com/justinholtweb/craft-schedulr/main/CHANGELOG.md",
         "class": "justinholtweb\\schedulr\\Plugin"
     }

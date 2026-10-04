@@ -6,10 +6,9 @@ namespace justinholtweb\schedulr\models;
 
 use Craft;
 use craft\base\Model;
-use craft\helpers\Json;
-use justinholtweb\schedulr\helpers\Data;
 use craft\helpers\StringHelper;
 use DateTime;
+use justinholtweb\schedulr\helpers\Data;
 
 /**
  * A saved, reusable segment.

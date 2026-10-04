@@ -147,8 +147,35 @@ log.
 - **PHP's `setDate(2026, 2, 31)` is the 3rd of March**, silently. Monthly rules clamp; they never roll
   over. And recurrence walks *dates*, applying the time of day last, or a 09:00 send becomes 08:00 for
   half the year.
+- **A batch must never decide a send's outcome from its own counts.** `Schedules::completeBatch()`
+  returns the occurrence's accumulated totals (or null while batches remain) and closes the send in
+  one conditional UPDATE, so exactly one batch closes it.
+- **Never reclaim a `sending` occurrence.** Its batches may still be queued behind a slow queue, and
+  re-dispatching sends the whole audience twice. Only `claimed` rows (no jobs yet) go back to pending.
+- **Recurrence is anchored on the rule's start date**, not on "now". Walking from today made
+  interval-2 rules fire weekly, yearly rules fire daily and "stop after N" never stop, because the
+  runner re-expands every minute.
+- **A lapsed licence must not widen a send.** Send-time code applies every *saved* Pro setting on any
+  edition; editions gate only creating or changing them. Skipping the audience on Lite sent
+  segmented notifications to everybody.
+- **`renderSandboxedObjectTemplate()` only sandboxes when `enableTwigSandbox` is on**, which is off by
+  default. Automations add Craft's `SandboxExtension` themselves around the render.
+- **Push endpoints are browser-supplied URLs the server POSTs to.** They are allowlisted to the push
+  services (`extraPushHosts` extends it), port 443, no redirects. The integration suite adds
+  `push.invalid` to the allowlist in memory.
+- **Only device-side push failures count towards `pushMaxFailures`** (`Sender::countsAgainstDevice`).
+  Counting 401/403 would let five sends with a bad keypair strip every subscription.
+- **An email unsubscribe link must not act on GET.** Mail scanners fetch every link; GET confirms,
+  POST (including RFC 8058 one-click) unsubscribes.
 
-## Still to do
+## Release state
 
-No git commit yet, no marketing site (`craft-schedulr-website`), not in the plugin registry's
-`plugins.json`, no GraphQL support.
+Release prep done 2026-10-03, nothing committed or tagged yet. Icon and mask are the family
+standard (accent tile, `#FEFEFE` glyph, mask is the same geometry). Licence is the Craft License.
+Docs live in `docs/*.md` (front matter = published; `plan.md` has none and stays off the site) and
+are synced to the hosted page `justinholt.com/plugins/craft-schedulr`, staged as `in-development` /
+`showOnSite: false` in `~/Sites/justinholt`. Promos: `promos/build.sh`, seven JPEGs.
+
+Still to do, all outward-facing: commit, date the CHANGELOG and tag 5.0.0, create the GitHub repo
+and push, Packagist, set edition prices at id.craftcms.com (only "$79 one-time + $59/yr" has ever
+been decided; Lite vs Pro prices are not), then flip the page to released. No GraphQL support.
